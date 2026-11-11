@@ -1,0 +1,50 @@
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) {
+    const kb = bytes / 1024;
+    return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} kB`;
+  }
+  const mb = bytes / (1024 * 1024);
+  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+}
+
+export function formatChars(chars: number): string {
+  return chars === 1 ? "1 character" : `${chars.toLocaleString("en-US")} characters`;
+}
+
+export function formatExpiry(expiresAt: number, now = Date.now()): string {
+  if (expiresAt === 0) return "never";
+  const ms = expiresAt - now;
+  if (ms <= 0) return "expired";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `in ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `in ${hours} hour${hours === 1 ? "" : "s"}`;
+  const days = Math.round(hours / 24);
+  return `in ${days} day${days === 1 ? "" : "s"}`;
+}
+
+export function formatReads(n: number): string {
+  if (n === 0) return "No limit";
+  return n === 1 ? "1 read" : `${n} reads`;
+}
+
+/** Sentence for the pre-read summary, where "0" means the link never burns out. */
+export function formatReadLifetime(views: number): string {
+  return views === 0 ? "No read limit" : `${formatReads(views)} before it burns`;
+}
+
+/** Sentence for the pre-read summary, where "0" means the link never expires. */
+export function formatExpiryLifetime(expiresAt: number): string {
+  return expiresAt === 0 ? "No expiry" : formatExpiry(expiresAt);
+}
+
+/** Shorten a long link for display without losing the id. */
+export function shortenLink(link: string): string {
+  const hashIndex = link.indexOf("#");
+  if (hashIndex === -1) return link;
+  const base = link.slice(0, hashIndex);
+  const fragment = link.slice(hashIndex + 1);
+  if (fragment.length <= 12) return link;
+  return `${base}#${fragment.slice(0, 6)}…${fragment.slice(-4)}`;
+}

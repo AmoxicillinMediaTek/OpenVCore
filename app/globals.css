@@ -1,0 +1,156 @@
+@import "tailwindcss";
+
+@theme {
+  /* Warm graphite, tinted toward the darkroom. */
+  --color-page: #161513;
+  --color-deep: #12110f;
+  --color-card: #1c1a18;
+  --color-raise: #262421;
+  --color-inset: #100f0d;
+
+  --color-ink: #efe9de;
+  --color-ink-2: #aaa398;
+  --color-ink-3: #8a847a;
+
+  --color-line: rgba(239, 233, 222, 0.08);
+  --color-line-strong: rgba(239, 233, 222, 0.16);
+
+  --color-ember: #e2703f;
+  --color-ember-hi: #ec8154;
+  --color-ember-soft: rgba(226, 112, 63, 0.14);
+  --color-good: #4cc38a;
+  --color-bad: #e5484d;
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", monospace;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --radius-card: 16px;
+  --radius-panel: 20px;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    background-color: var(--color-page);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-synthesis-weight: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  ::selection {
+    background-color: var(--color-ember);
+    color: var(--color-page);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ember);
+    outline-offset: 2px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-deep);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-raise);
+    border-radius: 8px;
+    border: 2px solid var(--color-deep);
+  }
+}
+
+@utility hairline {
+  border: 1px solid var(--color-line);
+}
+
+/* Keyboard keycap, used for the copy shortcut hint. */
+@utility keycap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--color-line-strong);
+  background-color: var(--color-raise);
+  color: var(--color-ink-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* The signature: a 2px burn line that depletes with every read. */
+.burn-track {
+  display: flex;
+  gap: 4px;
+  width: 100%;
+}
+.burn-seg {
+  height: 2px;
+  flex: 1;
+  border-radius: 2px;
+  background-color: color-mix(in oklab, var(--color-ember) 18%, transparent);
+  transition: background-color 400ms var(--ease-out);
+}
+.burn-seg[data-live="true"] {
+  background-color: var(--color-ember);
+}
+/* No read limit: the line never depletes, so it reads as a dashed run that
+   continues past the frame instead of a bar that can drain. */
+.burn-seg[data-unbounded="true"] {
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--color-ember) 0 18px,
+    color-mix(in oklab, var(--color-ember) 34%, transparent) 18px 24px
+  );
+  background-color: transparent;
+}
+
+details > summary {
+  list-style: none;
+  cursor: pointer;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+details[open] .faq-plus {
+  transform: rotate(45deg);
+}
+.faq-plus {
+  transition: transform 200ms var(--ease-out);
+}
+
+/* One-time entrance. Content settles into place instead of appearing. */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rise 520ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
