@@ -1,5 +1,8 @@
 import Link from "next/link";
+import { GitHubIcon } from "@/components/icons";
 import { Wordmark } from "@/components/mark";
+
+const REPO_URL = "https://github.com/AmoxicillinMediaTek/OpenVCore";
 
 export function SiteHeader() {
   return (
@@ -14,10 +17,14 @@ export function SiteHeader() {
             no accounts · no plaintext
           </span>
           <a
-            href="/#create"
-            className="text-[13px] text-ink-2 transition-colors duration-150 hover:text-ink md:hidden"
+            href={REPO_URL}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="OpenVCore on GitHub"
+            title="OpenVCore on GitHub"
+            className="flex size-9 items-center justify-center rounded-full text-ink no-underline transition-colors duration-150 hover:bg-raise"
           >
-            Create
+            <GitHubIcon className="size-5" />
           </a>
         </div>
       </div>
