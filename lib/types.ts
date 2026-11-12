@@ -44,11 +44,11 @@ export interface SecretInfo {
 }
 
 export interface CreatePayload {
+  /** Eight characters, chosen by the client because the content key derives from it. */
+  id: string;
   ciphertext: string;
   iv: string;
   kind: SecretKind;
-  /** 0 means no read limit. */
-  views: number;
   /** 0 means the link never expires. */
   ttlHours: number;
   bytes: number;
@@ -67,20 +67,16 @@ export interface OpenPayload {
   kdf: KdfSecret | null;
 }
 
-export const CHECK_TOKEN = "schemaload.check.v1";
+export const CHECK_TOKEN = "openvcore.check.v1";
 
 export const LIMITS = {
   maxFileBytes: 10 * 1024 * 1024,
   maxTextChars: 100_000,
   maxNoteChars: 160,
   minPassphrase: 8,
-  maxViews: 10,
   maxTtlHours: 720,
   kdfIterations: 310_000,
 } as const;
-
-/** 0 is the no-limit option and is always listed last. */
-export const VIEW_OPTIONS = [1, 3, 5, 10, 0] as const;
 
 export const TTL_OPTIONS = [
   { hours: 1, label: "1 hour" },

@@ -39,6 +39,19 @@ export function fromBase64Url(value: string): Uint8Array {
   return fromBase64(padded + "=".repeat(padLength));
 }
 
+/**
+ * The content key is derived from the link id, which is why the shared link has
+ * no fragment. Same 32 bytes every time for a given id, computed only in the
+ * browser; the server stores the ciphertext and never derives anything.
+ */
+export async function contentKeyForId(id: string): Promise<Uint8Array> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    encoder.encode(`openvcore.key.v1:${id}`),
+  );
+  return new Uint8Array(digest);
+}
+
 export async function importContentKey(raw: Uint8Array): Promise<CryptoKey> {
   return crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
     "encrypt",
@@ -117,32 +130,82 @@ export async function passphraseMatches(
 
 /* ---- file envelope: 4-byte header length + JSON header + raw bytes ---- */
 
-export interface FileEnvelope {
+export interface FileEntry {
   name: string;
   type: string;
   bytes: Uint8Array;
 }
 
-export function packFile(name: string, type: string, data: Uint8Array): Uint8Array {
-  const header = encoder.encode(JSON.stringify({ name, type }));
-  const out = new Uint8Array(4 + header.length + data.length);
+/**
+ * Header carries one descriptor per file, in order; the bodies follow back to
+ * back. Keeping every body in a single encrypted blob means the server sees one
+ * opaque payload no matter how many files were attached.
+ */
+export function packFiles(files: FileEntry[]): Uint8Array {
+  const header = encoder.encode(
+    JSON.stringify({
+      files: files.map((file) => ({
+        name: file.name,
+        type: file.type,
+        size: file.bytes.length,
+      })),
+    }),
+  );
+  const total = files.reduce((sum, file) => sum + file.bytes.length, 0);
+  const out = new Uint8Array(4 + header.length + total);
   new DataView(out.buffer).setUint32(0, header.length);
   out.set(header, 4);
-  out.set(data, 4 + header.length);
+
+  let offset = 4 + header.length;
+  for (const file of files) {
+    out.set(file.bytes, offset);
+    offset += file.bytes.length;
+  }
   return out;
 }
 
-export function unpackFile(buffer: Uint8Array): FileEnvelope {
+interface EnvelopeHeader {
+  files?: { name?: string; type?: string; size?: number }[];
+  name?: string;
+  type?: string;
+}
+
+/** Reads the multi-file envelope and the single-file one written by old links. */
+export function unpackFiles(buffer: Uint8Array): FileEntry[] {
   if (buffer.length < 4) throw new Error("File envelope is truncated.");
   const headerLength = new DataView(buffer.buffer, buffer.byteOffset, 4).getUint32(0);
   if (4 + headerLength > buffer.length) throw new Error("File envelope is truncated.");
-  const header = JSON.parse(decoder.decode(buffer.subarray(4, 4 + headerLength))) as {
-    name?: string;
-    type?: string;
-  };
-  return {
-    name: header.name || "secret.bin",
-    type: header.type || "application/octet-stream",
-    bytes: buffer.subarray(4 + headerLength),
-  };
+
+  const header = JSON.parse(
+    decoder.decode(buffer.subarray(4, 4 + headerLength)),
+  ) as EnvelopeHeader;
+
+  const body = buffer.subarray(4 + headerLength);
+
+  if (!Array.isArray(header.files)) {
+    return [
+      {
+        name: header.name || "secret.bin",
+        type: header.type || "application/octet-stream",
+        bytes: body,
+      },
+    ];
+  }
+
+  const files: FileEntry[] = [];
+  let offset = 0;
+  for (const entry of header.files) {
+    const size = Math.max(0, Math.min(Number(entry.size) || 0, body.length - offset));
+    files.push({
+      name: entry.name || `file-${files.length + 1}`,
+      type: entry.type || "application/octet-stream",
+      bytes: body.subarray(offset, offset + size),
+    });
+    offset += size;
+  }
+
+  if (files.length === 0) {
+    return [{ name: "secret.bin", type: "application/octet-stream", bytes: body }];
+  }
+  return files;
 }

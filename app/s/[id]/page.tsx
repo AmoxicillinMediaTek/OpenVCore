@@ -3,7 +3,7 @@ import { RevealPanel } from "@/components/reveal-panel";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "A one-time secret — SchemaLoad",
+  title: "A sealed secret — OpenVCore",
   robots: { index: false, follow: false, nocache: true },
 };
 

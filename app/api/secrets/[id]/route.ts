@@ -11,7 +11,7 @@ const NO_STORE = { "Cache-Control": "no-store" } as const;
 const GONE = {
   missing: { error: "This secret does not exist.", status: 404 },
   expired: { error: "This secret expired.", status: 410 },
-  consumed: { error: "This secret was already read and deleted.", status: 410 },
+  consumed: { error: "This secret was deleted.", status: 410 },
 } as const;
 
 export async function GET(

@@ -11,8 +11,8 @@
  * viewer reached through a `blob:` URL.
  */
 
-const CACHE = "schemaload-raw-v1";
-const STASH_PATH = "/__schemaload-raw/";
+const CACHE = "openvcore-raw-v1";
+const STASH_PATH = "/__openvcore-raw/";
 const REGISTER_TIMEOUT_MS = 4000;
 
 async function activeRegistration(): Promise<ServiceWorkerRegistration | null> {

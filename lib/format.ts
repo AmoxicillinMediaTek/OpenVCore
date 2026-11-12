@@ -24,16 +24,6 @@ export function formatExpiry(expiresAt: number, now = Date.now()): string {
   return `in ${days} day${days === 1 ? "" : "s"}`;
 }
 
-export function formatReads(n: number): string {
-  if (n === 0) return "No limit";
-  return n === 1 ? "1 read" : `${n} reads`;
-}
-
-/** Sentence for the pre-read summary, where "0" means the link never burns out. */
-export function formatReadLifetime(views: number): string {
-  return views === 0 ? "No read limit" : `${formatReads(views)} before it burns`;
-}
-
 /** Sentence for the pre-read summary, where "0" means the link never expires. */
 export function formatExpiryLifetime(expiresAt: number): string {
   return expiresAt === 0 ? "No expiry" : formatExpiry(expiresAt);

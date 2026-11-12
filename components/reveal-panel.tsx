@@ -12,36 +12,39 @@ import {
   LockIcon as Lock,
   SpinnerIcon as Loader2,
 } from "@/components/icons";
-import { BurnLine } from "@/components/burn-line";
 import { openSecret } from "@/lib/open-secret";
 import { stashRevealText, takeReveal } from "@/lib/handoff";
 import { prepareRaw } from "@/lib/raw-bridge";
 import {
+  contentKeyForId,
   decryptBytes,
   derivePassphraseKey,
   fromBase64,
-  fromBase64Url,
   importContentKey,
   passphraseMatches,
 } from "@/lib/crypto";
-import { formatBytes, formatExpiry, formatReads } from "@/lib/format";
+import { buildZip } from "@/lib/zip";
+import { formatBytes, formatExpiry } from "@/lib/format";
 import { LIMITS, type SecretInfo } from "@/lib/types";
 
-type Phase = "loading" | "ready" | "incomplete" | "gone" | "error";
+type Phase = "loading" | "ready" | "gone" | "error";
 
 interface RevealedText {
   kind: "text";
   text: string;
-  viewsLeft: number | null;
 }
 
-interface RevealedFile {
-  kind: "file";
+interface RevealedFileItem {
   name: string;
   type: string;
   url: string;
   size: number;
-  viewsLeft: number | null;
+  bytes: Uint8Array;
+}
+
+interface RevealedFile {
+  kind: "file";
+  files: RevealedFileItem[];
 }
 
 type Revealed = RevealedText | RevealedFile;
@@ -49,50 +52,40 @@ type Revealed = RevealedText | RevealedFile;
 export function RevealPanel({ id }: { id: string }) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [info, setInfo] = useState<SecretInfo | null>(null);
-  const [keyFragment, setKeyFragment] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState<Revealed | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const [burnLeft, setBurnLeft] = useState<number | null>(null);
-  const [restoredTotal, setRestoredTotal] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
-  const burnTimer = useRef<number | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (burnTimer.current !== null) window.clearTimeout(burnTimer.current);
-    };
-  }, []);
 
   useEffect(() => {
     let alive = true;
-    const fragment = window.location.hash.replace(/^#/, "");
-    setKeyFragment(fragment);
 
-    // Coming back from the raw page: a one-time blob is usually unlinked by
-    // then, so the tab hands its plaintext over instead of refetching a corpse.
+    // Coming back from the raw view: the tab hands its plaintext over instead of
+    // refetching and decrypting it a second time.
     const reopened = takeReveal(id);
     if (reopened) {
-      setRestoredTotal(reopened.viewsAllowed);
       if (reopened.kind === "file") {
-        const bytes = fromBase64(reopened.data);
         setRevealed({
           kind: "file",
-          name: reopened.name,
-          type: reopened.type,
-          url: URL.createObjectURL(
-            new Blob([bytes.slice().buffer], { type: reopened.type }),
-          ),
-          size: bytes.length,
-          viewsLeft: reopened.viewsLeft,
+          files: reopened.files.map((file) => {
+            const bytes = fromBase64(file.data);
+            return {
+              name: file.name,
+              type: file.type,
+              url: URL.createObjectURL(
+                new Blob([bytes.slice().buffer], { type: file.type }),
+              ),
+              size: bytes.length,
+              bytes,
+            };
+          }),
         });
       } else {
         setRevealed({
           kind: "text",
           text: reopened.text,
-          viewsLeft: reopened.viewsLeft,
         });
       }
       setPhase("ready");
@@ -110,10 +103,6 @@ export function RevealPanel({ id }: { id: string }) {
         }
         const data = (await response.json()) as SecretInfo;
         setInfo(data);
-        if (!data.locked && fragment.length === 0) {
-          setPhase("incomplete");
-          return;
-        }
         setPhase("ready");
       })
       .catch(() => {
@@ -127,8 +116,8 @@ export function RevealPanel({ id }: { id: string }) {
     };
   }, [id]);
 
-  // The note is the heading, so it has to be readable before a read is spent.
-  // On an unlocked link the key is already in the fragment: no round trip, no
+  // The note is the heading, so it has to be visible before anything is opened.
+  // On an unlocked link the key derives from the id alone: no round trip, no
   // password, nothing for the server to learn.
   useEffect(() => {
     if (!info || info.locked) return;
@@ -137,11 +126,10 @@ export function RevealPanel({ id }: { id: string }) {
       setNote(null);
       return;
     }
-    if (keyFragment.length === 0) return;
 
     let alive = true;
     (async () => {
-      const contentKey = await importContentKey(fromBase64Url(keyFragment));
+      const contentKey = await importContentKey(await contentKeyForId(id));
       const plain = await decryptBytes(
         contentKey,
         fromBase64(sealed.iv),
@@ -155,7 +143,7 @@ export function RevealPanel({ id }: { id: string }) {
     return () => {
       alive = false;
     };
-  }, [info, keyFragment]);
+  }, [id, info]);
 
   // On a locked link the key only exists once the password has been typed, so
   // the note follows the password field on a short debounce. A wrong guess fails
@@ -204,7 +192,9 @@ export function RevealPanel({ id }: { id: string }) {
 
   useEffect(() => {
     return () => {
-      if (revealed?.kind === "file") URL.revokeObjectURL(revealed.url);
+      if (revealed?.kind === "file") {
+        for (const file of revealed.files) URL.revokeObjectURL(file.url);
+      }
     };
   }, [revealed]);
 
@@ -214,10 +204,10 @@ export function RevealPanel({ id }: { id: string }) {
     setError(null);
 
     try {
-      const outcome = await openSecret({ id, keyFragment, password: passphrase, info });
+      const outcome = await openSecret({ id, password: passphrase, info });
 
       if (outcome.status === "password-mismatch") {
-        setError("That password does not match. Nothing was burned.");
+        setError("That password does not match.");
         return;
       }
       if (outcome.status === "gone") {
@@ -227,33 +217,23 @@ export function RevealPanel({ id }: { id: string }) {
 
       const content = outcome.content;
 
-      // Hold the pre-read burn line for a beat so the read visibly burns out.
-      // An unlimited link has no count to flip, so it stays on the open track.
-      if (content.viewsLeft !== null) {
-        setBurnLeft(content.viewsBefore);
-        if (burnTimer.current !== null) window.clearTimeout(burnTimer.current);
-        burnTimer.current = window.setTimeout(() => setBurnLeft(content.viewsLeft), 220);
-      } else {
-        setBurnLeft(null);
-      }
-
       if (content.kind === "file") {
-        const blob = new Blob([content.bytes.slice().buffer], {
-          type: content.type,
-        });
         setRevealed({
           kind: "file",
-          name: content.name,
-          type: content.type,
-          url: URL.createObjectURL(blob),
-          size: content.bytes.length,
-          viewsLeft: content.viewsLeft,
+          files: content.files.map((file) => ({
+            name: file.name,
+            type: file.type,
+            url: URL.createObjectURL(
+              new Blob([file.bytes.slice().buffer], { type: file.type }),
+            ),
+            size: file.bytes.length,
+            bytes: file.bytes,
+          })),
         });
       } else {
         setRevealed({
           kind: "text",
           text: content.text,
-          viewsLeft: content.viewsLeft,
         });
       }
     } catch (cause) {
@@ -265,7 +245,7 @@ export function RevealPanel({ id }: { id: string }) {
     } finally {
       setBusy(false);
     }
-  }, [busy, id, info, keyFragment, passphrase]);
+  }, [busy, id, info, passphrase]);
 
   const copy = async () => {
     if (revealed?.kind !== "text") return;
@@ -278,18 +258,34 @@ export function RevealPanel({ id }: { id: string }) {
     }
   };
 
-  /** Text only, and only after a read: the bytes come from this tab, not the server. */
+  /** Text only, and only once opened: the bytes come from this tab, not the server. */
   const downloadText = () => {
     if (revealed?.kind !== "text") return;
     const blob = new Blob([revealed.text], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `schemaload-${id}.txt`;
+    anchor.download = `openvcore-${id}.txt`;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     // Revoking too early cancels the write in some browsers.
+    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
+  /** File mode with more than one file: one archive, built from decrypted bytes. */
+  const downloadAll = () => {
+    if (revealed?.kind !== "file") return;
+    const blob = buildZip(
+      revealed.files.map((file) => ({ name: file.name, bytes: file.bytes })),
+    );
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `openvcore-${id}.zip`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
 
@@ -304,22 +300,16 @@ export function RevealPanel({ id }: { id: string }) {
    * service worker first; the worker answers the navigation with those bytes in
    * `text/plain`, which is what makes the browser paint its own text viewer.
    *
-   * A one-time link cannot be fetched again by then — its blob is already
-   * deleted — so the plaintext is also stashed in session storage, which lets
-   * the opened view come back if the browser reloads instead of restoring it
-   * from the back/forward cache.
+   * The plaintext is also stashed in session storage, so the opened view comes
+   * back if the browser reloads instead of restoring it from the back/forward
+   * cache.
    */
   const openRaw = async (event: React.MouseEvent<HTMLAnchorElement>) => {
     if (revealed?.kind !== "text") return;
     event.preventDefault();
     const href = event.currentTarget.href;
 
-    stashRevealText(
-      id,
-      revealed.text,
-      revealed.viewsLeft,
-      info?.viewsAllowed ?? restoredTotal,
-    );
+    stashRevealText(id, revealed.text);
 
     if (await prepareRaw(id, revealed.text)) {
       window.location.assign(href);
@@ -333,11 +323,7 @@ export function RevealPanel({ id }: { id: string }) {
     window.location.assign(url);
   };
 
-  const rawAvailable =
-    revealed !== null &&
-    (revealed.kind === "text" ||
-      revealed.viewsLeft === null ||
-      revealed.viewsLeft > 0);
+  const rawAvailable = revealed !== null && revealed.kind === "text";
 
   return (
     <main className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-[600px] flex-col justify-center px-6 py-14">
@@ -359,37 +345,17 @@ export function RevealPanel({ id }: { id: string }) {
               This secret is gone
             </h1>
             <p className="max-w-[46ch] text-[14px] leading-6 text-ink-2">
-              Links are deleted the moment their reads run out or their expiry
-              passes. A burned link, an expired one, and an id that never existed
-              all look exactly like this. That is deliberate.
+              Links are deleted by their sender, or when their expiry passes. An
+              expired link and an id that never existed look exactly like this.
+              That is deliberate.
             </p>
             <Link
               href="/"
-              className="mt-1 flex h-10 w-fit items-center gap-2 rounded-[10px] bg-raise px-4 text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#2d2b27]"
+              className="mt-1 flex h-10 w-fit items-center gap-2 rounded-[10px] bg-raise px-4 text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#1f1f1f]"
             >
               Create your own link
               <ArrowRight className="size-3.5" strokeWidth={1.5} />
             </Link>
-          </div>
-        ) : null}
-
-        {phase === "incomplete" ? (
-          <div className="flex flex-col gap-5 p-8">
-            <div className="flex items-center gap-2.5">
-              <span className="size-2 rounded-full bg-ember" aria-hidden="true" />
-              <p className="font-mono text-[11px] text-ink-3">key missing</p>
-            </div>
-            <h1 className="text-[24px] font-medium leading-[1.2] tracking-[-0.02em] text-ink">
-              This link lost its key
-            </h1>
-            <p className="max-w-[48ch] text-[14px] leading-6 text-ink-2">
-              The part after the <code className="font-mono text-[12px] text-ink">#</code> was
-              cut off somewhere between the sender and this tab. Without it the
-              ciphertext cannot be opened, and the server cannot help.
-            </p>
-            <p className="text-[13px] leading-5 text-ink-3">
-              Ask for the full link, copied in one piece.
-            </p>
           </div>
         ) : null}
 
@@ -409,7 +375,7 @@ export function RevealPanel({ id }: { id: string }) {
         {phase === "ready" && info && !revealed ? (
           <div className="flex flex-col gap-6 p-8">
             <div className="flex items-center justify-between gap-4">
-              <p className="font-mono text-[11px] text-ink-3">One-time secret</p>
+              <p className="font-mono text-[11px] text-ink-3">Encrypted secret</p>
               <span className="font-mono text-[11px] text-ink-3">
                 {formatExpiry(info.expiresAt)}
               </span>
@@ -435,13 +401,8 @@ export function RevealPanel({ id }: { id: string }) {
               <Row term="Contents">
                 {contentsLabel} · {formatBytes(info.bytes)} sealed
               </Row>
-              <Row term="Reads">
-                {info.viewsLeft === null ? "No limit" : `${formatReads(info.viewsLeft)} left`}
-              </Row>
               <Row term="Expires">{formatExpiry(info.expiresAt)}</Row>
             </dl>
-
-            <BurnLine total={info.viewsAllowed} left={info.viewsLeft ?? 0} />
 
             {info.locked ? (
               <div className="flex flex-col gap-2">
@@ -489,44 +450,11 @@ export function RevealPanel({ id }: { id: string }) {
               )}
             </button>
 
-            {info.viewsLeft === null ? (
-              info.expiresAt === 0 ? null : (
-                <p className="text-center text-[12px] leading-5 text-ink-3">
-                  Reads are unlimited. The link still dies when its expiry passes.
-                </p>
-              )
-            ) : (
-              <p className="text-center text-[12px] leading-5 text-ink-3">
-                {info.viewsLeft === 1
-                  ? "Opening it deletes the blob. There is no second read."
-                  : `${info.viewsLeft} reads remain. This one cannot be undone.`}
-              </p>
-            )}
           </div>
         ) : null}
 
         {revealed ? (
           <div className="flex flex-col gap-5 p-8">
-            <div className="flex items-center gap-2.5">
-              <span
-                className={`size-2 rounded-full ${
-                  revealed.viewsLeft === null
-                    ? "bg-good"
-                    : revealed.viewsLeft <= 0
-                      ? "bg-ember"
-                      : "bg-good"
-                }`}
-                aria-hidden="true"
-              />
-              <p className="font-mono text-[11px] text-ink-3">
-                {revealed.viewsLeft === null
-                  ? "no read limit"
-                  : revealed.viewsLeft <= 0
-                    ? "burned after this read"
-                    : `${revealed.viewsLeft} reads left`}
-              </p>
-            </div>
-
             {revealed.kind === "text" ? (
               <>
                 <div className="max-h-[360px] overflow-auto rounded-[10px] border border-line bg-inset p-4">
@@ -534,92 +462,86 @@ export function RevealPanel({ id }: { id: string }) {
                     {revealed.text}
                   </pre>
                 </div>
-                <div className="flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={copy}
-                      className="flex h-10 items-center gap-2 rounded-[10px] bg-raise px-4 text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#2d2b27]"
-                    >
-                      {copied ? (
-                        <Check className="size-4 text-good" strokeWidth={1.5} />
-                      ) : (
-                        <Copy className="size-4 text-ink-2" strokeWidth={1.5} />
-                      )}
-                      {copied ? "Copied" : "Copy"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={downloadText}
-                      className="flex h-10 items-center gap-2 rounded-[10px] border border-line-strong px-4 text-[13px] text-ink-2 transition-colors duration-150 hover:bg-raise hover:text-ink"
-                    >
-                      <Download className="size-4" strokeWidth={1.5} />
-                      Download
-                    </button>
-                  </div>
-                  <span className="font-mono text-[11px] text-ink-3">
-                    {revealed.text.length.toLocaleString("en-US")} characters
-                  </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={copy}
+                    className="flex h-10 items-center gap-2 rounded-[10px] bg-raise px-4 text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#1f1f1f]"
+                  >
+                    {copied ? (
+                      <Check className="size-4 text-good" strokeWidth={1.5} />
+                    ) : (
+                      <Copy className="size-4 text-ink-2" strokeWidth={1.5} />
+                    )}
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={downloadText}
+                    className="flex h-10 items-center gap-2 rounded-[10px] border border-line-strong px-4 text-[13px] text-ink-2 transition-colors duration-150 hover:bg-raise hover:text-ink"
+                  >
+                    <Download className="size-4" strokeWidth={1.5} />
+                    Download
+                  </button>
                 </div>
               </>
             ) : (
               <>
-                <div className="flex items-center gap-3 rounded-[10px] border border-line bg-inset p-4">
-                  <FileDown className="size-4 shrink-0 text-ink-2" strokeWidth={1.5} />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] text-ink">{revealed.name}</p>
-                    <p className="font-mono text-[11px] text-ink-3">
-                      {formatBytes(revealed.size)}
-                    </p>
-                  </div>
+                <div className="flex max-h-[280px] flex-col gap-1.5 overflow-auto">
+                  {revealed.files.map((file) => (
+                    <div
+                      key={file.url}
+                      className="flex items-center gap-3 rounded-[10px] border border-line bg-inset px-4 py-3"
+                    >
+                      <FileDown
+                        className="size-4 shrink-0 text-ink-2"
+                        strokeWidth={1.5}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] text-ink">{file.name}</p>
+                        <p className="font-mono text-[11px] text-ink-3">
+                          {formatBytes(file.size)}
+                        </p>
+                      </div>
+                      <a
+                        href={file.url}
+                        download={file.name}
+                        aria-label={`Download ${file.name}`}
+                        className="shrink-0 text-ink-3 transition-colors duration-150 hover:text-ink"
+                      >
+                        <Download className="size-4" strokeWidth={1.5} />
+                      </a>
+                    </div>
+                  ))}
                 </div>
-                <a
-                  href={revealed.url}
-                  download={revealed.name}
-                  className="flex h-10 w-fit items-center gap-2 rounded-[10px] bg-raise px-4 text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#2d2b27]"
-                >
-                  <Download className="size-4 text-ink-2" strokeWidth={1.5} />
-                  Download
-                </a>
+                {revealed.files.length > 1 ? (
+                  <button
+                    type="button"
+                    onClick={downloadAll}
+                    className="flex h-10 w-fit items-center gap-2 rounded-[10px] bg-raise px-4 text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#1f1f1f]"
+                  >
+                    <Download className="size-4 text-ink-2" strokeWidth={1.5} />
+                    Download all (.zip)
+                  </button>
+                ) : null}
               </>
             )}
 
-            <div className="flex flex-col gap-2 border-t border-line pt-4">
-              <BurnLine
-                total={
-                  revealed.viewsLeft === null
-                    ? 0
-                    : (info?.viewsAllowed ??
-                      restoredTotal ??
-                      Math.max(1, burnLeft ?? revealed.viewsLeft))
-                }
-                left={burnLeft ?? revealed.viewsLeft ?? 0}
-              />
-              <p className="text-[12px] leading-4 text-ink-3">
-                {revealed.viewsLeft === null
-                  ? "Unlimited reads. Anyone with the link can open it again until it expires or is destroyed."
-                  : revealed.viewsLeft <= 0
-                    ? "The blob is deleted. This tab is the only place this exists now."
-                    : "Close this tab when you are done. The link is still live."}
-              </p>
-
-              {rawAvailable ? (
+            {rawAvailable ? (
+              <div className="border-t border-line pt-4">
                 <a
-                  href={`/s/${id}/raw${keyFragment ? `#${keyFragment}` : ""}`}
+                  href={`/s/${id}/raw`}
                   onClick={openRaw}
-                  className="mt-1 flex h-9 w-fit items-center rounded-[8px] border border-line-strong px-3 font-mono text-[11px] text-ink-2 transition-colors duration-150 hover:bg-raise hover:text-ink"
+                  className="flex h-9 w-fit items-center rounded-[8px] border border-line-strong px-3 font-mono text-[11px] text-ink-2 transition-colors duration-150 hover:bg-raise hover:text-ink"
                 >
                   Raw page
                 </a>
-              ) : null}
-            </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
 
-      <p className="mt-6 text-center font-mono text-[11px] text-ink-3">
-        decrypted in your browser · {id}
-      </p>
     </main>
   );
 }

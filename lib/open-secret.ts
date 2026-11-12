@@ -1,28 +1,23 @@
 import {
+  contentKeyForId,
   decryptBytes,
   derivePassphraseKey,
   fromBase64,
-  fromBase64Url,
   importContentKey,
   passphraseMatches,
-  unpackFile,
+  unpackFiles,
+  type FileEntry,
 } from "@/lib/crypto";
 import { LIMITS, type OpenPayload, type SecretInfo } from "@/lib/types";
 
 export interface OpenedText {
   kind: "text";
   text: string;
-  viewsLeft: number | null;
-  viewsBefore: number | null;
 }
 
 export interface OpenedFile {
   kind: "file";
-  name: string;
-  type: string;
-  bytes: Uint8Array;
-  viewsLeft: number | null;
-  viewsBefore: number | null;
+  files: FileEntry[];
 }
 
 export type Opened = OpenedText | OpenedFile;
@@ -33,18 +28,17 @@ export type OpenOutcome =
   | { status: "gone" };
 
 /**
- * Spends one read and returns the decrypted payload, or the reason it could not.
+ * Fetches the sealed payload and decrypts it in this tab.
  * The password is verified against the encrypted check constant before the
- * server is asked to spend a read, so a wrong password costs nothing.
+ * server is asked for the payload, so a wrong password costs nothing.
  * Throws only for genuine failures (bad key material, broken ciphertext).
  */
 export async function openSecret(options: {
   id: string;
-  keyFragment: string;
   password: string;
   info: SecretInfo;
 }): Promise<OpenOutcome> {
-  const { id, keyFragment, password, info } = options;
+  const { id, password, info } = options;
 
   let passKey: CryptoKey | null = null;
   if (info.locked) {
@@ -65,8 +59,6 @@ export async function openSecret(options: {
   if (!response.ok) return { status: "gone" };
 
   const payload = (await response.json()) as OpenPayload;
-  const viewsLeft = payload.viewsLeft;
-  const viewsBefore = viewsLeft === null ? null : viewsLeft + 1;
 
   let contentKey: CryptoKey;
   if (passKey) {
@@ -78,7 +70,7 @@ export async function openSecret(options: {
     );
     contentKey = await importContentKey(raw);
   } else {
-    contentKey = await importContentKey(fromBase64Url(keyFragment));
+    contentKey = await importContentKey(await contentKeyForId(id));
   }
 
   const plaintext = await decryptBytes(
@@ -88,17 +80,9 @@ export async function openSecret(options: {
   );
 
   if (payload.kind === "file") {
-    const envelope = unpackFile(plaintext);
     return {
       status: "opened",
-      content: {
-        kind: "file",
-        name: envelope.name,
-        type: envelope.type,
-        bytes: envelope.bytes,
-        viewsLeft,
-        viewsBefore,
-      },
+      content: { kind: "file", files: unpackFiles(plaintext) },
     };
   }
 
@@ -107,8 +91,6 @@ export async function openSecret(options: {
     content: {
       kind: "text",
       text: new TextDecoder().decode(plaintext),
-      viewsLeft,
-      viewsBefore,
     },
   };
 }

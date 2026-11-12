@@ -3,37 +3,35 @@ import { toBase64 } from "@/lib/crypto";
 /**
  * Per-tab handoff for the opened view.
  *
- * When a one-time blob is unlinked the moment its last read is spent, the tab has
- * to carry the plaintext itself. This module keeps the only direction still
- * needed: the raw view (or any reload) handing the opened secret back to
- * `/s/{id}`, so coming back from it never lands on "gone".
+ * The tab that opened a secret carries the plaintext itself, so the raw view and
+ * any reload can render it again without asking the server to decrypt anything it
+ * cannot decrypt anyway.
  *
- * The reveal → raw direction now travels through the service worker and the
- * Cache API instead, because a fact transmitted in `sessionStorage` cannot reach
- * a worker that has to answer a document request. See `lib/raw-bridge.ts`.
+ * The reveal → raw direction travels through the service worker and the Cache
+ * API instead, because a fact transmitted in `sessionStorage` cannot reach a
+ * worker that has to answer a document request. See `lib/raw-bridge.ts`.
  *
  * sessionStorage is scoped to one tab, never leaves the browser, and dies with
  * the tab. Every entry is consumed and deleted on arrival.
  */
 
-const REVEAL_PREFIX = "schemaload.reveal.";
+const REVEAL_PREFIX = "openvcore.reveal.";
 
 export interface TextHandoff {
   kind: "text";
   text: string;
-  viewsLeft: number | null;
-  /** Needed to redraw the burn line on the page that receives it. 0 = no limit. */
-  viewsAllowed: number | null;
 }
 
-export interface FileHandoff {
-  kind: "file";
+export interface HandoffFile {
   name: string;
   type: string;
   /** base64 of the decrypted bytes. */
   data: string;
-  viewsLeft: number | null;
-  viewsAllowed: number | null;
+}
+
+export interface FileHandoff {
+  kind: "file";
+  files: HandoffFile[];
 }
 
 export type RevealHandoff = TextHandoff | FileHandoff;
@@ -61,64 +59,47 @@ function take(key: string): Record<string, unknown> | null {
   }
 }
 
-function numberOrNull(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
-}
+/* ---- opened view → reveal page ---- */
 
-/* ---- raw → reveal ---- */
-
-export function stashRevealText(
-  id: string,
-  text: string,
-  viewsLeft: number | null,
-  viewsAllowed: number | null,
-): boolean {
-  return put(REVEAL_PREFIX + id, { kind: "text", text, viewsLeft, viewsAllowed });
+export function stashRevealText(id: string, text: string): boolean {
+  return put(REVEAL_PREFIX + id, { kind: "text", text });
 }
 
 export function stashRevealFile(
   id: string,
-  file: {
-    name: string;
-    type: string;
-    bytes: Uint8Array;
-    viewsLeft: number | null;
-    viewsAllowed: number | null;
-  },
+  files: { name: string; type: string; bytes: Uint8Array }[],
 ): boolean {
   return put(REVEAL_PREFIX + id, {
     kind: "file",
-    name: file.name,
-    type: file.type,
-    data: toBase64(file.bytes),
-    viewsLeft: file.viewsLeft,
-    viewsAllowed: file.viewsAllowed,
+    files: files.map((file) => ({
+      name: file.name,
+      type: file.type,
+      data: toBase64(file.bytes),
+    })),
   });
 }
 
 export function takeReveal(id: string): RevealHandoff | null {
   const parsed = take(REVEAL_PREFIX + id);
   if (!parsed) return null;
-  const viewsLeft = numberOrNull(parsed.viewsLeft);
-  const viewsAllowed = numberOrNull(parsed.viewsAllowed);
 
   if (parsed.kind === "text" && typeof parsed.text === "string") {
-    return { kind: "text", text: parsed.text, viewsLeft, viewsAllowed };
+    return { kind: "text", text: parsed.text };
   }
-  if (
-    parsed.kind === "file" &&
-    typeof parsed.name === "string" &&
-    typeof parsed.type === "string" &&
-    typeof parsed.data === "string"
-  ) {
-    return {
-      kind: "file",
-      name: parsed.name,
-      type: parsed.type,
-      data: parsed.data,
-      viewsLeft,
-      viewsAllowed,
-    };
+  if (parsed.kind === "file" && Array.isArray(parsed.files)) {
+    const files = (parsed.files as Record<string, unknown>[])
+      .filter(
+        (entry) =>
+          typeof entry?.name === "string" &&
+          typeof entry?.type === "string" &&
+          typeof entry?.data === "string",
+      )
+      .map((entry) => ({
+        name: entry.name as string,
+        type: entry.type as string,
+        data: entry.data as string,
+      }));
+    if (files.length > 0) return { kind: "file", files };
   }
   return null;
 }

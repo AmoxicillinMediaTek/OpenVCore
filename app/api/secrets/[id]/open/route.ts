@@ -34,7 +34,7 @@ export async function POST(
         ? { error: "This secret does not exist.", status: 404 }
         : result.status === "expired"
           ? { error: "This secret expired.", status: 410 }
-          : { error: "This secret was already read and deleted.", status: 410 };
+          : { error: "This secret was deleted.", status: 410 };
     return NextResponse.json({ error: gone.error }, { status: gone.status, headers: NO_STORE });
   }
 

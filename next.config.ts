@@ -6,7 +6,7 @@ const nextConfig: NextConfig = {
     return {
       // A `text/plain` document hides the <link rel="icon"> from the browser, so
       // it asks for the default path. Without this, every raw view logs a 404.
-      beforeFiles: [{ source: "/favicon.ico", destination: "/icon.svg" }],
+      beforeFiles: [{ source: "/favicon.ico", destination: "/icon.png" }],
       afterFiles: [],
       fallback: [],
     };

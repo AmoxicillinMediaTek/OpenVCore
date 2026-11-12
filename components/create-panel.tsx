@@ -13,32 +13,29 @@ import {
   SpinnerIcon as Loader2,
   XIcon as X,
 } from "@/components/icons";
-import { BurnLine } from "@/components/burn-line";
 import {
+  contentKeyForId,
   derivePassphraseKey,
   encryptBytes,
   importContentKey,
-  packFile,
+  packFiles,
   randomBytes,
   toBase64,
-  toBase64Url,
   wrapContentKey,
 } from "@/lib/crypto";
+import { newSecretId } from "@/lib/ids";
 import {
   formatBytes,
   formatChars,
   formatExpiryLifetime,
-  formatReadLifetime,
-  formatReads,
 } from "@/lib/format";
-import { LIMITS, TTL_OPTIONS, VIEW_OPTIONS } from "@/lib/types";
+import { LIMITS, TTL_OPTIONS } from "@/lib/types";
 
 type Mode = "text" | "file";
 
 interface Created {
   id: string;
   link: string;
-  views: number;
   expiresAt: number;
   locked: boolean;
 }
@@ -47,8 +44,7 @@ export function CreatePanel() {
   const [mode, setMode] = useState<Mode>("text");
   const [note, setNote] = useState("");
   const [text, setText] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [views, setViews] = useState(1);
+  const [files, setFiles] = useState<File[]>([]);
   const [ttl, setTtl] = useState(24);
   const [usePass, setUsePass] = useState(false);
   const [pass, setPass] = useState("");
@@ -58,12 +54,11 @@ export function CreatePanel() {
   const [dragging, setDragging] = useState(false);
   const [copied, setCopied] = useState(false);
   const [qr, setQr] = useState<string | null>(null);
-  const [destroyed, setDestroyed] = useState(false);
+  const [destroyedAt, setDestroyedAt] = useState<string | null>(null);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const noteId = useId();
   const textId = useId();
-  const viewsId = useId();
   const ttlId = useId();
   const passId = useId();
 
@@ -71,26 +66,38 @@ export function CreatePanel() {
     setCreated(null);
     setCopied(false);
     setQr(null);
-    setDestroyed(false);
+    setDestroyedAt(null);
     setError(null);
     setNote("");
     setText("");
-    setFile(null);
+    setFiles([]);
     setPass("");
     setUsePass(false);
   }, []);
 
-  const pickFile = (next: File | null) => {
+  const pickFiles = (list: FileList | File[] | null) => {
     setError(null);
-    if (!next) {
-      setFile(null);
+    if (!list) {
+      setFiles([]);
       return;
     }
-    if (next.size > LIMITS.maxFileBytes) {
-      setError(`That file is ${formatBytes(next.size)}. The limit is 10 MB.`);
+    const next = Array.from(list);
+    const total = next.reduce((sum, item) => sum + item.size, 0);
+    if (total > LIMITS.maxFileBytes) {
+      setError(`Those files add up to ${formatBytes(total)}. The limit is 10 MB.`);
       return;
     }
-    setFile(next);
+    setFiles(next);
+  };
+
+  const addFiles = (list: FileList | File[] | null) => {
+    if (!list) return;
+    pickFiles([...files, ...Array.from(list)]);
+  };
+
+  const dropFile = (index: number) => {
+    setFiles(files.filter((_, i) => i !== index));
+    if (fileInput.current) fileInput.current.value = "";
   };
 
   const submit = async (event: React.FormEvent) => {
@@ -106,7 +113,7 @@ export function CreatePanel() {
       setError(`Text is capped at ${LIMITS.maxTextChars.toLocaleString("en-US")} characters.`);
       return;
     }
-    if (mode === "file" && !file) {
+    if (mode === "file" && files.length === 0) {
       setError("Choose a file first.");
       return;
     }
@@ -121,77 +128,88 @@ export function CreatePanel() {
 
     setBusy(true);
     try {
-      const rawKey = randomBytes(32);
-      const contentKey = await importContentKey(rawKey);
+      const plaintext =
+        mode === "file"
+          ? packFiles(
+              await Promise.all(
+                files.map(async (item) => ({
+                  name: item.name,
+                  type: item.type || "application/octet-stream",
+                  bytes: new Uint8Array(await item.arrayBuffer()),
+                })),
+              ),
+            )
+          : new TextEncoder().encode(text);
 
-      let plaintext: Uint8Array;
-      if (mode === "file" && file) {
-        plaintext = packFile(file.name, file.type || "application/octet-stream", new Uint8Array(await file.arrayBuffer()));
-      } else {
-        plaintext = new TextEncoder().encode(text);
-      }
-
-      const sealed = await encryptBytes(contentKey, plaintext);
-
-      // The note rides in the same envelope, sealed under the same content key.
-      // It is never sent as plaintext, so the server cannot read the heading.
       const noteText = note.trim();
-      const sealedNote =
-        noteText.length > 0
+      let saved: { id: string; expiresAt: number } | null = null;
+
+      // The id is chosen here, not by the server, because the content key derives
+      // from it. A taken id means another roll, which costs one re-encryption.
+      for (let attempt = 0; attempt < 6 && !saved; attempt += 1) {
+        const id = newSecretId();
+        const rawKey = await contentKeyForId(id);
+        const contentKey = await importContentKey(rawKey);
+
+        const sealed = await encryptBytes(contentKey, plaintext);
+
+        // The note rides in the same envelope, sealed under the same content key.
+        const sealedNote = noteText
           ? await encryptBytes(contentKey, new TextEncoder().encode(noteText))
           : null;
 
-      let fragment = "";
-      let kdf: Record<string, unknown> | undefined;
+        let kdf: Record<string, unknown> | undefined;
+        if (usePass) {
+          const salt = randomBytes(16);
+          const passKey = await derivePassphraseKey(pass, salt);
+          const wrapped = await wrapContentKey(passKey, rawKey);
+          kdf = {
+            salt: toBase64(salt),
+            iterations: LIMITS.kdfIterations,
+            check: wrapped.check,
+            checkIv: wrapped.checkIv,
+            wrapped: wrapped.wrapped,
+            wrapIv: wrapped.wrapIv,
+          };
+        }
 
-      if (usePass) {
-        const salt = randomBytes(16);
-        const passKey = await derivePassphraseKey(pass, salt);
-        const wrapped = await wrapContentKey(passKey, rawKey);
-        kdf = {
-          salt: toBase64(salt),
-          iterations: LIMITS.kdfIterations,
-          check: wrapped.check,
-          checkIv: wrapped.checkIv,
-          wrapped: wrapped.wrapped,
-          wrapIv: wrapped.wrapIv,
-        };
-      } else {
-        fragment = `#${toBase64Url(rawKey)}`;
+        const response = await fetch("/api/secrets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id,
+            ciphertext: toBase64(sealed.ciphertext),
+            iv: toBase64(sealed.iv),
+            kind: mode,
+            bytes: sealed.ciphertext.length,
+            ttlHours: ttl,
+            kdf,
+            note: sealedNote
+              ? {
+                  ciphertext: toBase64(sealedNote.ciphertext),
+                  iv: toBase64(sealedNote.iv),
+                }
+              : null,
+          }),
+        });
+
+        if (response.status === 409) continue;
+
+        if (!response.ok) {
+          const data = (await response.json().catch(() => ({}))) as { error?: string };
+          throw new Error(data.error ?? "The server refused the upload.");
+        }
+
+        saved = (await response.json()) as { id: string; expiresAt: number };
       }
 
-      const response = await fetch("/api/secrets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ciphertext: toBase64(sealed.ciphertext),
-          iv: toBase64(sealed.iv),
-          kind: mode,
-          bytes: sealed.ciphertext.length,
-          views,
-          ttlHours: ttl,
-          kdf,
-          note: sealedNote
-            ? {
-                ciphertext: toBase64(sealedNote.ciphertext),
-                iv: toBase64(sealedNote.iv),
-              }
-            : null,
-        }),
-      });
+      if (!saved) throw new Error("Could not find a free link id. Try again.");
 
-      if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error ?? "The server refused the upload.");
-      }
-
-      const data = (await response.json()) as { id: string; expiresAt: number };
-      const link = `${window.location.origin}/s/${data.id}${fragment}`;
+      const link = `${window.location.origin}/s/${saved.id}`;
       setCreated({
-        id: data.id,
+        id: saved.id,
         link,
-        views,
-        expiresAt: data.expiresAt,
+        expiresAt: saved.expiresAt,
         locked: usePass,
       });
 
@@ -202,7 +220,7 @@ export function CreatePanel() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          id: data.id,
+          id: saved.id,
           link,
           password: usePass ? pass : null,
         }),
@@ -238,7 +256,7 @@ export function CreatePanel() {
         margin: 1,
         width: 232,
         errorCorrectionLevel: "M",
-        color: { dark: "#161513", light: "#efe9de" },
+        color: { dark: "#000000", light: "#f4f2ee" },
       });
       setQr(dataUrl);
     } catch {
@@ -249,7 +267,14 @@ export function CreatePanel() {
   const burnNow = async () => {
     if (!created) return;
     await fetch(`/api/secrets/${created.id}`, { method: "DELETE" }).catch(() => null);
-    setDestroyed(true);
+    setDestroyedAt(
+      new Date().toLocaleString("en-GB", {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      }),
+    );
     setQr(null);
   };
 
@@ -259,27 +284,23 @@ export function CreatePanel() {
         <div className="flex flex-col gap-5 p-6">
           <div className="flex items-center gap-2.5">
             <span
-              className={`size-2 rounded-full ${destroyed ? "bg-bad" : "bg-good"}`}
+              className={`size-2 rounded-full ${destroyedAt ? "bg-bad" : "bg-good"}`}
               aria-hidden="true"
             />
             <p className="text-[14px] text-ink">
-              {destroyed ? "Link deleted" : "Link created"}
+              {destroyedAt ? `Link deleted ${destroyedAt}` : "Link created"}
             </p>
             <span className="ml-auto font-mono text-[11px] text-ink-3">
               {created.id}
             </span>
           </div>
 
-          {destroyed ? (
-            <p className="text-[13px] leading-5 text-ink-2">
-              The blob is deleted. Anyone still holding the link will find nothing.
-            </p>
-          ) : (
+          {destroyedAt ? null : (
             <>
               <p className="text-[13px] leading-5 text-ink-2">
                 {created.locked
                   ? "Send this link and the password by different channels. The link alone cannot open it."
-                  : "This link is shown once here. It holds the key after the #, so copying it is the only way to share it."}
+                  : null}
               </p>
 
               <div className="rounded-[10px] border border-line bg-inset px-3 py-3">
@@ -292,7 +313,7 @@ export function CreatePanel() {
                 <button
                   type="button"
                   onClick={copy}
-                  className="flex h-10 items-center justify-center gap-2 rounded-[10px] bg-raise text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#2d2b27]"
+                  className="flex h-10 items-center justify-center gap-2 rounded-[10px] bg-raise text-[13px] font-medium text-ink transition-colors duration-150 hover:bg-[#1f1f1f]"
                 >
                   {copied ? (
                     <Check className="size-4 text-good" strokeWidth={1.5} />
@@ -319,19 +340,15 @@ export function CreatePanel() {
                 </div>
               ) : null}
 
-              <div className="flex flex-col gap-2">
-                <BurnLine total={created.views} left={created.views} />
-                <div className="flex items-center justify-between font-mono text-[11px] text-ink-3">
-                  <span>{formatReadLifetime(created.views)}</span>
-                  <span>{formatExpiryLifetime(created.expiresAt)}</span>
-                </div>
-              </div>
+              <p className="font-mono text-[11px] text-ink-3">
+                {formatExpiryLifetime(created.expiresAt)}
+              </p>
 
             </>
           )}
 
           <div className="flex items-center justify-between gap-4 border-t border-line pt-4">
-            {destroyed ? (
+            {destroyedAt ? (
               <span aria-hidden="true" />
             ) : (
               <button
@@ -347,7 +364,7 @@ export function CreatePanel() {
               onClick={reset}
               className="ml-auto flex items-center gap-1.5 rounded-[8px] border border-line-strong px-3 py-1.5 text-[12px] text-ink-2 transition-colors duration-150 hover:bg-raise hover:text-ink"
             >
-              {destroyed ? "Create a new link" : "Create another"}
+              {destroyedAt ? "Create a new link" : "Create another"}
             </button>
           </div>
         </div>
@@ -373,7 +390,7 @@ export function CreatePanel() {
                 setError(null);
               }}
               maxLength={LIMITS.maxNoteChars}
-              placeholder="For the person opening it — e.g. The vault code, read once"
+              placeholder="For the person opening it — e.g. The vault code"
               spellCheck={false}
               autoComplete="off"
               className="h-10 w-full rounded-[10px] border border-line bg-inset px-3.5 text-[13px] text-ink outline-none transition-colors duration-150 focus:border-line-strong placeholder:text-ink-3"
@@ -415,7 +432,6 @@ export function CreatePanel() {
                 );
               })}
             </div>
-            <span className="font-mono text-[11px] text-ink-3">AES-256-GCM</span>
           </div>
 
           {mode === "text" ? (
@@ -447,65 +463,79 @@ export function CreatePanel() {
               onDrop={(event) => {
                 event.preventDefault();
                 setDragging(false);
-                pickFile(event.dataTransfer.files?.[0] ?? null);
+                addFiles(event.dataTransfer.files);
               }}
-              className={`flex h-[184px] flex-col items-center justify-center gap-2 rounded-[10px] border bg-inset px-4 text-center transition-colors duration-150 ${
+              className={`flex min-h-[184px] flex-col items-center justify-center gap-2 rounded-[10px] border bg-inset px-4 py-5 text-center transition-colors duration-150 ${
                 dragging ? "border-ember" : "border-line"
               }`}
             >
-              {file ? (
+              {files.length > 0 ? (
                 <>
-                  <Paperclip className="size-4 text-ink-2" strokeWidth={1.5} />
-                  <p className="max-w-full truncate px-2 text-[13px] text-ink">{file.name}</p>
-                  <p className="font-mono text-[11px] text-ink-3">
-                    {formatBytes(file.size)} · encrypted in this tab
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => pickFile(null)}
-                    className="mt-1 flex items-center gap-1 text-[12px] text-ink-3 transition-colors duration-150 hover:text-bad"
-                  >
-                    <X className="size-3" strokeWidth={1.5} />
-                    Remove
-                  </button>
+                  <div className="flex w-full flex-col gap-1.5">
+                    {files.map((item, index) => (
+                      <div
+                        key={`${item.name}-${index}`}
+                        className="flex items-center gap-2 rounded-[8px] border border-line px-2.5 py-1.5 text-left"
+                      >
+                        <Paperclip className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.5} />
+                        <span className="min-w-0 flex-1 truncate text-[12px] text-ink">
+                          {item.name}
+                        </span>
+                        <span className="shrink-0 font-mono text-[10px] text-ink-3">
+                          {formatBytes(item.size)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => dropFile(index)}
+                          aria-label={`Remove ${item.name}`}
+                          className="shrink-0 text-ink-3 transition-colors duration-150 hover:text-bad"
+                        >
+                          <X className="size-3" strokeWidth={1.5} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-1 flex w-full items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => fileInput.current?.click()}
+                      className="text-[12px] text-ink-3 transition-colors duration-150 hover:text-ink"
+                    >
+                      Add more
+                    </button>
+                    <span className="font-mono text-[11px] text-ink-3">
+                      {files.length} file{files.length === 1 ? "" : "s"} ·{" "}
+                      {formatBytes(files.reduce((sum, item) => sum + item.size, 0))}
+                    </span>
+                  </div>
                 </>
               ) : (
                 <>
                   <Paperclip className="size-4 text-ink-3" strokeWidth={1.5} />
                   <p className="text-[13px] text-ink-2">
-                    Drop a file, or{" "}
+                    Drop files, or{" "}
                     <button
                       type="button"
                       onClick={() => fileInput.current?.click()}
                       className="text-ink underline decoration-line-strong underline-offset-4 transition-colors duration-150 hover:decoration-ink-3"
                     >
-                      choose one
+                      choose
                     </button>
                   </p>
-                  <p className="font-mono text-[11px] text-ink-3">10 MB max · any type</p>
+                  <p className="font-mono text-[11px] text-ink-3">10 MB total · any type</p>
                 </>
               )}
               <input
                 ref={fileInput}
                 type="file"
+                multiple
                 className="hidden"
-                onChange={(event) => pickFile(event.target.files?.[0] ?? null)}
+                onChange={(event) => addFiles(event.target.files)}
               />
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Reads" htmlFor={viewsId}>
-              <Select
-                id={viewsId}
-                value={views}
-                onChange={(value) => setViews(Number(value))}
-                options={VIEW_OPTIONS.map((count) => ({
-                  value: String(count),
-                  label: formatReads(count),
-                }))}
-              />
-            </Field>
+          <div className="grid grid-cols-1 gap-3">
             <Field label="Expires" htmlFor={ttlId}>
               <Select
                 id={ttlId}
@@ -572,7 +602,7 @@ export function CreatePanel() {
             </p>
           ) : null}
 
-          <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col">
             <button
               type="submit"
               disabled={busy}
@@ -581,15 +611,12 @@ export function CreatePanel() {
               {busy ? (
                 <>
                   <Loader2 className="size-4 animate-spin" strokeWidth={1.5} />
-                  Encrypting in this tab
+                  Creating...
                 </>
               ) : (
-                "Create one-time link"
+                "Create"
               )}
             </button>
-            <p className="text-center text-[11px] text-ink-3">
-              The plaintext never leaves this tab
-            </p>
           </div>
         </form>
       )}

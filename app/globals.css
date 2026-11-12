@@ -1,19 +1,20 @@
 @import "tailwindcss";
 
 @theme {
-  /* Warm graphite, tinted toward the darkroom. */
-  --color-page: #161513;
-  --color-deep: #12110f;
-  --color-card: #1c1a18;
-  --color-raise: #262421;
-  --color-inset: #100f0d;
+  /* OLED: true black behind everything, with surfaces lifted just enough to
+     separate from it. Pure #000 turns those pixels off on an emissive panel. */
+  --color-page: #000000;
+  --color-deep: #000000;
+  --color-card: #080808;
+  --color-raise: #141414;
+  --color-inset: #050505;
 
-  --color-ink: #efe9de;
-  --color-ink-2: #aaa398;
-  --color-ink-3: #8a847a;
+  --color-ink: #f4f2ee;
+  --color-ink-2: #a6a39d;
+  --color-ink-3: #7d7a75;
 
-  --color-line: rgba(239, 233, 222, 0.08);
-  --color-line-strong: rgba(239, 233, 222, 0.16);
+  --color-line: rgba(255, 255, 255, 0.09);
+  --color-line-strong: rgba(255, 255, 255, 0.18);
 
   --color-ember: #e2703f;
   --color-ember-hi: #ec8154;
@@ -36,8 +37,12 @@
     scroll-behavior: smooth;
   }
 
+  html,
   body {
     background-color: var(--color-page);
+  }
+
+  body {
     color: var(--color-ink);
     font-family: var(--font-sans);
     font-synthesis-weight: none;
@@ -90,33 +95,6 @@
   line-height: 1;
 }
 
-/* The signature: a 2px burn line that depletes with every read. */
-.burn-track {
-  display: flex;
-  gap: 4px;
-  width: 100%;
-}
-.burn-seg {
-  height: 2px;
-  flex: 1;
-  border-radius: 2px;
-  background-color: color-mix(in oklab, var(--color-ember) 18%, transparent);
-  transition: background-color 400ms var(--ease-out);
-}
-.burn-seg[data-live="true"] {
-  background-color: var(--color-ember);
-}
-/* No read limit: the line never depletes, so it reads as a dashed run that
-   continues past the frame instead of a bar that can drain. */
-.burn-seg[data-unbounded="true"] {
-  background-image: repeating-linear-gradient(
-    90deg,
-    var(--color-ember) 0 18px,
-    color-mix(in oklab, var(--color-ember) 34%, transparent) 18px 24px
-  );
-  background-color: transparent;
-}
-
 details > summary {
   list-style: none;
   cursor: pointer;
@@ -131,7 +109,7 @@ details[open] .faq-plus {
   transition: transform 200ms var(--ease-out);
 }
 
-/* One-time entrance. Content settles into place instead of appearing. */
+/* Page entrance. Content settles into place instead of appearing. */
 @keyframes rise {
   from {
     opacity: 0;

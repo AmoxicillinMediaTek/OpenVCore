@@ -1,7 +1,7 @@
 /**
  * Proves that a link outlives the process that created it.
  *
- * Creates a one-read secret over the API, kills the running next-server, starts a
+ * Creates a secret over the API, kills the running next-server, starts a
  * new one, then peeks and opens the same id. With the filesystem store this failed
  * whenever the project directory was replaced; with the Postgres store the row is
  * independent of both the process and the checkout.
@@ -74,23 +74,32 @@ async function startServer() {
   if (!up) return;
 
   const plaintext = "survives-a-deploy-48f1";
+  const wanted = Array.from({ length: 8 }, () =>
+    "abcdefghijklmnopqrstuvwxyz0123456789"[
+      Math.floor(Math.random() * 36)
+    ],
+  ).join("");
   const created = await fetch(`${BASE}/api/secrets`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      id: wanted,
       ciphertext: Buffer.from(plaintext).toString("base64"),
       iv: Buffer.alloc(12, 9).toString("base64"),
       kind: "text",
       bytes: plaintext.length,
-      views: 1,
       ttlHours: 24,
       note: null,
     }),
   });
   const { id } = await created.json();
-  check("created a one-read link", created.status === 201 && /^[a-f0-9]{16}$/.test(id), id);
+  check(
+    "created a link under the chosen id",
+    created.status === 201 && /^[a-z0-9]{8}$/.test(id) && id === wanted,
+    id,
+  );
 
-  const dataDir = path.join(ROOT, ".schemaload-data");
+  const dataDir = path.join(ROOT, ".openvcore-data");
   check(
     "nothing was written to the project directory",
     !fs.existsSync(dataDir) || fs.readdirSync(dataDir).length === 0,
@@ -110,7 +119,7 @@ async function startServer() {
   const info = await peeked.json();
   check(
     "the link is still readable after the restart",
-    peeked.status === 200 && info.viewsLeft === 1,
+    peeked.status === 200 && info.viewsLeft === null,
     `${peeked.status} ${JSON.stringify(info).slice(0, 90)}`,
   );
 
@@ -123,6 +132,17 @@ async function startServer() {
     `${opened.status}`,
   );
 
-  const spent = await fetch(`${BASE}/api/secrets/${id}/open`, { method: "POST" });
-  check("the single read was still honoured once", spent.status === 404, String(spent.status));
+  const again = await fetch(`${BASE}/api/secrets/${id}/open`, { method: "POST" });
+  const againPayload = await again.json();
+  check(
+    "reading it did not delete it",
+    again.status === 200 &&
+      Buffer.from(againPayload.ciphertext, "base64").toString("utf8") === plaintext,
+    String(again.status),
+  );
+
+  const after = await fetch(`${BASE}/api/secrets/${id}`, { cache: "no-store" });
+  check("it is still there for the next reader", after.status === 200, String(after.status));
+
+  await fetch(`${BASE}/api/secrets/${id}`, { method: "DELETE" });
 })();

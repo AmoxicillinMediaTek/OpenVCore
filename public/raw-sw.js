@@ -8,9 +8,9 @@
 // this worker answers the navigation with those bytes. One stash entry, consumed
 // and deleted on the way out, never touching the network.
 
-const CACHE = "schemaload-raw-v1";
-const STASH_PATH = "/__schemaload-raw/";
-const RAW_PATH = /^\/s\/[a-f0-9]{16}\/raw$/;
+const CACHE = "openvcore-raw-v1";
+const STASH_PATH = "/__openvcore-raw/";
+const RAW_PATH = /^\/s\/[a-z0-9]{8}\/raw$/;
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -23,7 +23,7 @@ self.addEventListener("activate", (event) => {
       const names = await caches.keys();
       await Promise.all(
         names
-          .filter((name) => name.startsWith("schemaload-raw-") && name !== CACHE)
+          .filter((name) => name.startsWith("openvcore-raw-") && name !== CACHE)
           .map((name) => caches.delete(name)),
       );
       await self.clients.claim();

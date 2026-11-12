@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { storeFailure } from "@/lib/api-errors";
+import { ID_RE } from "@/lib/ids";
 import { createSecret, sweepExpired } from "@/lib/store";
 import { LIMITS } from "@/lib/types";
 
@@ -32,16 +33,17 @@ export async function POST(request: Request) {
     return fail("Body must be JSON.");
   }
 
+  // The id is chosen by the client because the content key derives from it.
+  if (typeof body.id !== "string" || !ID_RE.test(body.id)) {
+    return fail("id must be eight lowercase letters or digits.", 400);
+  }
+  const id = body.id;
+
   if (!isBase64(body.ciphertext)) return fail("ciphertext must be base64.");
   if (!isBase64(body.iv, 12)) return fail("iv must be 12 bytes of base64.");
 
   const kind = body.kind === "file" ? "file" : body.kind === "text" ? "text" : null;
   if (!kind) return fail("kind must be text or file.");
-
-  const views = Number(body.views ?? 1);
-  if (!Number.isInteger(views) || views < 0 || views > LIMITS.maxViews) {
-    return fail(`views must be 0 (no limit) or an integer from 1 to ${LIMITS.maxViews}.`);
-  }
 
   const ttlHours = Number(body.ttlHours ?? 24);
   if (!Number.isFinite(ttlHours) || ttlHours < 0 || ttlHours > LIMITS.maxTtlHours) {
@@ -90,11 +92,15 @@ export async function POST(request: Request) {
   let record: Awaited<ReturnType<typeof createSecret>>;
   try {
     record = await createSecret({
+      id,
       ciphertext,
       iv: body.iv,
       kind,
       bytes,
-      views,
+      // Links have no read limit: the payload is never deleted by a reader. It
+      // leaves only when the sender deletes it or its expiry passes. Any `views`
+      // field in the request is ignored rather than trusted.
+      views: 0,
       ttlHours,
       kdf,
       note,
@@ -107,6 +113,10 @@ export async function POST(request: Request) {
     const failure = storeFailure(cause);
     if (failure) return failure;
     throw cause;
+  }
+
+  if (!record) {
+    return fail("That id is taken. Pick another.", 409);
   }
 
   return NextResponse.json(

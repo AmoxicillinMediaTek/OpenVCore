@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { storeFailure } from "@/lib/api-errors";
+import { ID_RE } from "@/lib/ids";
 import { logLink, ledgerConfigured, type LedgerRow } from "@/lib/ledger";
 import { peekSecret } from "@/lib/store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ID_RE = /^[a-f0-9]{16}$/;
 const MAX_LINK_CHARS = 4096;
 const MAX_PASSWORD_CHARS = 512;
 const MAX_UA_CHARS = 512;
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
   const { id, link, password } = body;
 
   if (typeof id !== "string" || !ID_RE.test(id)) {
-    return fail("id must be a 16 character hex string.");
+    return fail("id must be eight lowercase letters or digits.");
   }
   if (typeof link !== "string" || link.length === 0 || link.length > MAX_LINK_CHARS) {
     return fail("link must be a URL.");

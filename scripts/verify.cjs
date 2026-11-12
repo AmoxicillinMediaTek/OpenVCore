@@ -6,6 +6,15 @@ const BASE = process.env.BASE || "http://127.0.0.1:3211";
 const OUT = "/tmp/opencode/shots";
 fs.mkdirSync(OUT, { recursive: true });
 
+const ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+function randomId() {
+  let out = "";
+  for (let i = 0; i < 8; i += 1) {
+    out += ID_ALPHABET[Math.floor(Math.random() * ID_ALPHABET.length)];
+  }
+  return out;
+}
+
 const results = [];
 function check(name, ok, detail = "") {
   results.push({ name, ok, detail });
@@ -29,7 +38,7 @@ async function launch() {
   });
 }
 
-async function createSecret(browser, { mode = "text", text, file, views = 1, ttl, passphrase, note }) {
+async function createSecret(browser, { mode = "text", text, file, files, ttl, passphrase, note }) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   await page.goto(BASE + "/", { waitUntil: "networkidle" });
 
@@ -39,13 +48,9 @@ async function createSecret(browser, { mode = "text", text, file, views = 1, ttl
 
   if (mode === "file") {
     await page.click('button[role="tab"]:has-text("File")');
-    await page.setInputFiles('input[type="file"]', file);
+    await page.setInputFiles('input[type="file"]', files ?? file);
   } else {
     await page.fill("textarea", text);
-  }
-
-  if (views !== 1) {
-    await page.getByLabel("Reads").selectOption(String(views));
   }
 
   if (ttl !== undefined && ttl !== 24) {
@@ -112,11 +117,15 @@ async function openLink(browser, link) {
   };
 
   try {
-    // ---- 1. Text: create, reveal, verify plaintext, gone on second visit ----
+    // ---- 1. Text: create, reveal, verify plaintext, second reader still opens ----
     const textSecret = "hoppers-9K!vault-rail";
     const t1 = await createSecret(browser, { text: textSecret });
     track(t1.page);
-    check("text: link has fragment key", /\/s\/[\w-]+#[\w-]+$/.test(t1.link), t1.link);
+    check(
+      "text: link is eight characters with no key fragment",
+      /^https?:\/\/[^/]+\/s\/[a-z0-9]{8}$/.test(t1.link) && !t1.link.includes("#"),
+      t1.link,
+    );
     check(
       "ledger: create posts the finished link",
       t1.ledger?.status === 201 && t1.ledger?.body?.link === t1.link,
@@ -134,11 +143,18 @@ async function openLink(browser, link) {
     const r1 = await openLink(browser, t1.link);
     track(r1);
     await r1.screenshot({ path: `${OUT}/reveal-ready.png` });
-    const beforeLabel = await r1.locator('[role="img"]').first().getAttribute("aria-label");
+    const revealWords = await r1.locator("body").innerText();
+    check("reveal: no read wording", !/\bread(s)?\b/i.test(revealWords), "clean");
     const openLabel = (await r1.locator('button:has-text("Open")').innerText()).trim();
     check("reveal: primary button says Open", openLabel === "Open", openLabel);
     const openIconCount = await r1.locator('button:has-text("Open") svg').count();
     check("reveal: Open button carries no icon", openIconCount === 0, String(openIconCount));
+    const readyWords = await r1.locator("body").innerText();
+    check(
+      "reveal: no expiry footnote before opening",
+      !readyWords.includes("Anyone with the link"),
+      "clean",
+    );
     const downloadBeforeOpen = await r1.locator('button:has-text("Download")').count();
     check(
       "text: download hidden until the secret is opened",
@@ -150,9 +166,11 @@ async function openLink(browser, link) {
     await r1.waitForTimeout(500);
     const revealedText = await r1.locator("pre").innerText();
     check("text: decrypted payload matches", revealedText === textSecret, revealedText);
-    const afterLabel = await r1.locator('[role="img"]').first().getAttribute("aria-label");
-    check("text: burn line starts full", beforeLabel === "1 of 1 reads left", String(beforeLabel));
-    check("text: burn line empties after read", afterLabel === "0 of 1 reads left", String(afterLabel));
+    const openedWords = await r1.locator("body").innerText();
+    check("reveal: no read wording after opening", !/\bread(s)?\b/i.test(openedWords), "clean");
+    check("copy: no character count in the opened view", !openedWords.includes("characters"), "clean");
+    check("copy: no 'decrypted' status label", !/decrypted/i.test(openedWords), "clean");
+    check("copy: no link-lifetime footnote", !openedWords.includes("Anyone with the link"), "clean");
 
     const [textDownload] = await Promise.all([
       r1.waitForEvent("download"),
@@ -164,39 +182,49 @@ async function openLink(browser, link) {
     check("text: download writes the plaintext", textSaved === textSecret, `${textSaved.length} chars`);
     check(
       "text: download is named after the id",
-      /^schemaload-[\w-]+\.txt$/.test(textDownload.suggestedFilename() ?? ""),
+      /^openvcore-[\w-]+\.txt$/.test(textDownload.suggestedFilename() ?? ""),
       textDownload.suggestedFilename(),
     );
     await r1.screenshot({ path: `${OUT}/reveal-open.png` });
 
-    const gone = await openLink(browser, t1.link);
-    await gone.waitForSelector("text=This secret is gone", { timeout: 10000 });
-    check("text: second visit is gone", true);
-    await gone.screenshot({ path: `${OUT}/reveal-gone.png` });
-    await gone.close();
+    const again = await openLink(browser, t1.link);
+    track(again);
+    await again.click('button:has-text("Open")');
+    await again.waitForSelector("pre", { timeout: 15000 });
+    const againText = await again.locator("pre").innerText();
+    check("text: a second reader still opens it", againText === textSecret, againText);
+    await again.screenshot({ path: `${OUT}/reveal-second-read.png` });
+    await again.close();
 
-    // ---- 2. File: upload, download, byte-for-byte compare ----
+    // ---- 2. Files: two uploads, per-file download, one zip ----
     const samplePath = "/tmp/opencode/sample.bin";
     const sampleBytes = Buffer.from(
       Array.from({ length: 2048 }, (_, i) => (i * 37 + 11) % 256),
     );
     fs.writeFileSync(samplePath, sampleBytes);
 
+    const extraPath = "/tmp/opencode/notes.txt";
+    const extraBytes = Buffer.from("second file inside the same sealed link\n", "utf8");
+    fs.writeFileSync(extraPath, extraBytes);
+
     const t2 = await createSecret(browser, {
       mode: "file",
-      file: samplePath,
-      views: 3,
+      files: [samplePath, extraPath],
     });
-    check("file: link created", t2.link.includes("/s/"));
+    check("file: link created", /\/s\/[a-z0-9]{8}$/.test(t2.link), t2.link);
 
     const r2 = await openLink(browser, t2.link);
     track(r2);
     await r2.click('button:has-text("Open")');
     await r2.waitForSelector("a[download]", { timeout: 15000 });
-    const downloadName = await r2.locator("a[download]").getAttribute("download");
+
+    const rows2 = await r2.locator("a[download]").count();
+    check("file: both files listed in the opened view", rows2 === 2, String(rows2));
+
+    const downloadName = await r2.locator("a[download]").first().getAttribute("download");
     const [download] = await Promise.all([
       r2.waitForEvent("download"),
-      r2.click("a[download]"),
+      r2.locator("a[download]").first().click(),
     ]);
     const savedPath = "/tmp/opencode/downloaded.bin";
     await download.saveAs(savedPath);
@@ -208,12 +236,44 @@ async function openLink(browser, link) {
       `${savedBytes.length} bytes`,
     );
     await r2.screenshot({ path: `${OUT}/reveal-file.png` });
-    const textButtonInFile = await r2.locator('button:has-text("Download")').count();
+    const textButtonInFile = await r2.locator('button:text-is("Download")').count();
     check(
       "file: text download button stays out of file mode",
       textButtonInFile === 0,
       String(textButtonInFile),
     );
+
+    // ---- 2b. Download all: one archive holding both files ----
+    const zipButton = r2.locator('button:has-text("Download all")');
+    check("file: download all offered for two files", (await zipButton.count()) === 1, "1");
+    const [zipDownload] = await Promise.all([
+      r2.waitForEvent("download"),
+      zipButton.click(),
+    ]);
+    const zipPath = "/tmp/opencode/downloaded.zip";
+    await zipDownload.saveAs(zipPath);
+    check(
+      "file: zip download is named after the id",
+      /^openvcore-[a-z0-9]{8}\.zip$/.test(zipDownload.suggestedFilename() ?? ""),
+      zipDownload.suggestedFilename(),
+    );
+    const zipBytes = fs.readFileSync(zipPath);
+    check(
+      "file: zip starts with a local file header",
+      zipBytes.subarray(0, 4).toString("latin1") === "PK\u0003\u0004",
+      zipBytes.subarray(0, 4).toString("hex"),
+    );
+    const zipDir = "/tmp/opencode/unzip";
+    fs.rmSync(zipDir, { recursive: true, force: true });
+    require("node:child_process").execFileSync("unzip", ["-o", zipPath, "-d", zipDir]);
+    const zippedSample = fs.readFileSync(path.join(zipDir, "sample.bin"));
+    const zippedExtra = fs.readFileSync(path.join(zipDir, "notes.txt"));
+    check(
+      "file: zip extracts both files byte for byte",
+      zippedSample.equals(sampleBytes) && zippedExtra.equals(extraBytes),
+      `${zippedSample.length}+${zippedExtra.length} bytes`,
+    );
+    await r2.screenshot({ path: `${OUT}/reveal-file-zip.png` });
     await r2.close();
 
     // ---- 3. Password: no fragment, wrong pass does not burn ----
@@ -238,7 +298,7 @@ async function openLink(browser, link) {
 
     const id3 = t3.link.split("/s/")[1];
     const meta = await (await fetch(`${BASE}/api/secrets/${id3}`)).json();
-    check("password: wrong attempt spends no read", meta.viewsLeft === 1, `viewsLeft=${meta.viewsLeft}`);
+    check("password: wrong attempt spends no read", meta.viewsLeft === null, `viewsLeft=${meta.viewsLeft}`);
 
     await r3.fill('input[aria-label="Password"]', passphrase);
     await r3.click('button:has-text("Open")');
@@ -248,28 +308,31 @@ async function openLink(browser, link) {
     await r3.screenshot({ path: `${OUT}/reveal-password.png` });
     await r3.close();
 
-    // ---- 4. Multi-view: three reads, burn line depletes each time ----
-    const t4 = await createSecret(browser, { text: "three-read secret", views: 3 });
-    const expected = ["2 of 3 reads left", "1 of 3 reads left", "0 of 3 reads left"];
+    // ---- 4. Readers: many reads leave the payload intact ----
+    const t4 = await createSecret(browser, { text: "many-reader secret" });
     for (let read = 0; read < 3; read += 1) {
       const page = await openLink(browser, t4.link);
       track(page);
       await page.click('button:has-text("Open")');
       await page.waitForSelector("pre", { timeout: 15000 });
-      await page.waitForTimeout(450);
-      const label = await page.locator('[role="img"]').first().getAttribute("aria-label");
-      check(`multi-view: read ${read + 1} burn line`, label === expected[read], String(label));
-      if (read === 0) {
-        const dead = await page.locator('.burn-seg[data-live="false"]').count();
-        check("multi-view: one segment burned out", dead === 1, `${dead} dead segments`);
-        await page.screenshot({ path: `${OUT}/reveal-multiview.png` });
+      await page.waitForTimeout(300);
+      const body = await page.locator("pre").innerText();
+      check(`readers: open ${read + 1} decrypts`, body === "many-reader secret", body);
+      const words = await page.locator("body").innerText();
+      check(`readers: open ${read + 1} has no read wording`, !/\bread(s)?\b/i.test(words), "clean");
+      if (read === 2) {
+        await page.screenshot({ path: `${OUT}/reveal-many-reads.png` });
       }
       await page.close();
     }
-    const dead = await openLink(browser, t4.link);
-    await dead.waitForSelector("text=This secret is gone", { timeout: 10000 });
-    check("multi-view: gone after final read", true);
-    await dead.close();
+    const id4 = t4.link.split("/s/")[1].split("#")[0];
+    const survivor = await fetch(`${BASE}/api/secrets/${id4}`);
+    const survivorMeta = await survivor.json();
+    check(
+      "readers: the link survives every read",
+      survivor.status === 200 && survivorMeta.viewsLeft === null,
+      `${survivor.status} viewsLeft=${survivorMeta.viewsLeft}`,
+    );
 
     // ---- 5. No limit: unlimited reads and no expiry ----
     const t5 = await createSecret(browser, {
@@ -290,23 +353,19 @@ async function openLink(browser, link) {
     for (let read = 0; read < 2; read += 1) {
       const page = await openLink(browser, t5.link);
       track(page);
-      const trackLabel = await page.locator('[role="img"]').first().getAttribute("aria-label");
       if (read === 0) {
-        check("no limit: burn line renders open track", trackLabel === "no read limit", String(trackLabel));
         await page.screenshot({ path: `${OUT}/reveal-nolimit.png` });
       }
       await page.click('button:has-text("Open")');
       await page.waitForSelector("pre", { timeout: 15000 });
       const body = await page.locator("pre").innerText();
-      check(`no limit: read ${read + 1} still decrypts`, body === "no-limit-secret", body);
-      const after = await page.locator('[role="img"]').first().getAttribute("aria-label");
-      check(`no limit: read ${read + 1} track stays open`, after === "no read limit", String(after));
+      check(`no limit: open ${read + 1} still decrypts`, body === "no-limit-secret", body);
       await page.close();
     }
     await t5.page.close();
 
     // ---- 5b. Delete returns to the create form ----
-    const t6 = await createSecret(browser, { text: "destroy-me", views: 1, ttl: 24 });
+    const t6 = await createSecret(browser, { text: "destroy-me", ttl: 24 });
     track(t6.page);
     await t6.page.click('button:has-text("Delete")');
     await t6.page.waitForSelector("text=Link deleted", { timeout: 10000 });
@@ -314,14 +373,19 @@ async function openLink(browser, link) {
     const backText = await t6.page.locator('button:has-text("Create a new link")').count();
     check("delete: offers a way back to the form", backText === 1, String(backText));
     await t6.page.click('button:has-text("Create a new link")');
-    const formBack = await t6.page.locator('button:has-text("Create one-time link")').count();
-    check("delete: create form is reachable again", formBack === 1, String(formBack));
+    const formBack = await t6.page.locator('button[type="submit"]').count();
+    const formLabel = (await t6.page.locator('button[type="submit"]').innerText()).trim();
+    check(
+      "delete: create form is reachable again",
+      formBack === 1 && formLabel === "Create",
+      `${formBack} ${formLabel}`,
+    );
     const freshText = await t6.page.locator("textarea").inputValue();
     check("delete: form comes back empty", freshText === "", JSON.stringify(freshText));
     await t6.page.close();
 
     // ---- 5c. Raw page ----
-    const t7 = await createSecret(browser, { text: "raw-view-secret", views: 1, ttl: 24 });
+    const t7 = await createSecret(browser, { text: "raw-view-secret", ttl: 24 });
     track(t7.page);
     const r7 = await openLink(browser, t7.link);
     track(r7);
@@ -335,22 +399,25 @@ async function openLink(browser, link) {
     await rawLink.waitFor({ timeout: 10000 });
     const rawHref = await rawLink.getAttribute("href");
     check(
-      "raw: button points at /s/<id>/raw and keeps the key",
-      /\/s\/[\w-]+\/raw#[\w-]+$/.test(rawHref ?? ""),
+      "raw: button points at /s/<id>/raw with no fragment",
+      /\/s\/[a-z0-9]{8}\/raw$/.test(rawHref ?? ""),
       String(rawHref),
     );
 
-    // This link has one read, so the blob is already gone; the raw view can only
-    // come from what this tab holds.
-    const rawGone = await (await fetch(`${BASE}/api/secrets/${rawHref.split("/s/")[1].split("#")[0]}`)).status;
-    check("raw: server copy already burned", rawGone === 404, String(rawGone));
+    // The read did not consume the secret, so the server still has it — but it
+    // still cannot produce the plaintext, which is why the worker answers instead.
+    const rawId = rawHref.split("/")[2];
+    const stillStored = await (
+      await fetch(`${BASE}/api/secrets/${rawId}`)
+    ).status;
+    check("raw: opening a link does not delete it", stillStored === 200, String(stillStored));
 
-    const direct = await fetch(`${BASE}${rawHref.split("#")[0]}`);
+    const direct = await fetch(`${BASE}${rawHref}`);
     const directBody = await direct.text();
     check(
       "raw: a direct request answers text/plain",
       (direct.headers.get("content-type") ?? "").startsWith("text/plain") &&
-        directBody.includes("only be read as raw text"),
+        directBody.includes("only be shown as raw text"),
       direct.headers.get("content-type") ?? "",
     );
 
@@ -362,13 +429,13 @@ async function openLink(browser, link) {
     check("raw: the browser sees a text/plain document", rawType === "text/plain", rawType);
     const rawText = (await r7.evaluate(() => document.body.innerText)).trim();
     check("raw: plaintext renders from the tab", rawText === "raw-view-secret", rawText);
-    check("raw: tab sits on the raw route", /\/s\/[\w-]+\/raw#/.test(r7.url()), r7.url());
+    check("raw: tab sits on the raw route", /\/s\/[a-z0-9]{8}\/raw$/.test(r7.url()), r7.url());
     const chrome = await r7.evaluate(() => document.querySelectorAll("main, header, button").length);
     check("raw: no app chrome in the document", chrome === 0, String(chrome));
     await r7.screenshot({ path: `${OUT}/raw-text.png` });
 
     await r7.goBack();
-    await r7.waitForURL(/\/s\/[\w-]+#/, { timeout: 20000 });
+    await r7.waitForURL(/\/s\/[a-z0-9]{8}$/, { timeout: 20000 });
     await r7.waitForSelector("pre", { timeout: 20000 });
     const restored = (await r7.locator("pre").innerText()).trim();
     check("raw: back lands on the opened view", restored === "raw-view-secret", restored);
@@ -440,7 +507,7 @@ async function openLink(browser, link) {
     check("note: appears once the password matches", unlockedHeading === NOTE, unlockedHeading);
     const id10 = t10.link.split("/s/")[1].split("#")[0];
     const meta10 = await (await fetch(`${BASE}/api/secrets/${id10}`)).json();
-    check("note: previewing it spends no read", meta10.viewsLeft === 3, String(meta10.viewsLeft));
+    check("note: previewing it spends no read", meta10.viewsLeft === null, String(meta10.viewsLeft));
 
     // ---- 5e. Page furniture ----
     const home = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -451,43 +518,56 @@ async function openLink(browser, link) {
     const bodyHome = await home.locator("body").innerText();
     check("layout: no stray destroy wording", !bodyHome.includes("Destroy now"), "clean");
 
+    const submitLabel = (await home.locator('button[type="submit"]').innerText()).trim();
+    check("create: submit button says Create", submitLabel === "Create", submitLabel);
+    check("create: no algorithm label on the form", !bodyHome.includes("AES-256-GCM"), "clean");
+    check("create: no plaintext caption", !bodyHome.includes("plaintext never leaves"), "clean");
+    check("create: no one-time sharing sentence", !bodyHome.includes("shown once here"), "clean");
+    check("create: no link-lifetime footnote", !bodyHome.includes("Anyone with the link"), "clean");
+
     const headerText = await home.locator("header").first().innerText();
-    check("brand: wordmark says SchemaLoad", headerText.includes("SchemaLoad"), headerText.split("\n")[0]);
+    check("brand: wordmark says OpenVCore", headerText.includes("OpenVCore"), headerText.split("\n")[0]);
     check("brand: no Cinder left on the page", !bodyHome.includes("Cinder"), "clean");
     const iconOk = await home
-      .locator('header img[src="/brand/schema-s.svg"]')
+      .locator('header img[src="/brand/openvcore.png"]')
       .first()
       .evaluate((img) => img.complete && img.naturalWidth > 0);
-    check("brand: orange S icon loads", iconOk === true, String(iconOk));
-    const iconRes = await fetch(`${BASE}/icon.svg`);
+    check("brand: OpenVCore icon loads", iconOk === true, String(iconOk));
+    const iconRes = await fetch(`${BASE}/icon.png`);
     check(
-      "brand: favicon served as svg",
-      iconRes.ok && (iconRes.headers.get("content-type") ?? "").includes("svg"),
+      "brand: favicon served as png",
+      iconRes.ok && (iconRes.headers.get("content-type") ?? "").includes("png"),
       `${iconRes.status} ${iconRes.headers.get("content-type")}`,
     );
     const icoRes = await fetch(`${BASE}/favicon.ico`);
     check(
       "brand: the default favicon path answers",
-      icoRes.ok && (icoRes.headers.get("content-type") ?? "").includes("svg"),
+      icoRes.ok && (icoRes.headers.get("content-type") ?? "").includes("png"),
       `${icoRes.status} ${icoRes.headers.get("content-type")}`,
     );
     await home.close();
 
     // ---- 5f. Ledger route contract ----
+    const seedSecretId = randomId();
     const seed = await fetch(`${BASE}/api/secrets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        id: seedSecretId,
         ciphertext: Buffer.alloc(48, 7).toString("base64"),
         iv: Buffer.alloc(12, 3).toString("base64"),
         kind: "text",
         bytes: 48,
-        views: 2,
         ttlHours: 24,
         note: null,
       }),
     });
     const seedId = (await seed.json()).id;
+    check(
+      "api: create stores under the client-chosen id",
+      seed.status === 201 && seedId === seedSecretId,
+      `${seed.status} ${seedId}`,
+    );
     const ledgerPost = (payload, headers = {}) =>
       fetch(`${BASE}/api/links`, {
         method: "POST",
@@ -498,7 +578,7 @@ async function openLink(browser, link) {
     const goodLedger = await ledgerPost(
       {
         id: seedId,
-        link: `${BASE}/s/${seedId}#Zm9vYmFyYmF6cXV4MTIzNDU2Nzg5MGFiY2RlZg`,
+        link: `${BASE}/s/${seedId}`,
         password: null,
       },
       { "X-Forwarded-For": "198.51.100.24, 10.1.1.1" },
@@ -526,7 +606,7 @@ async function openLink(browser, link) {
 
     const badLink = await ledgerPost({
       id: seedId,
-      link: `${BASE}/s/deadbeefdeadbeef`,
+      link: `${BASE}/s/${randomId()}`,
       password: null,
     });
     check(
@@ -536,8 +616,8 @@ async function openLink(browser, link) {
     );
 
     const missing = await ledgerPost({
-      id: "aaaaaaaaaaaaaaaa",
-      link: `${BASE}/s/aaaaaaaaaaaaaaaa`,
+      id: "aaaaaaaa",
+      link: `${BASE}/s/aaaaaaaa`,
       password: null,
     });
     check("ledger api: rejects an id with no secret", missing.status === 404, String(missing.status));
@@ -545,11 +625,12 @@ async function openLink(browser, link) {
     // Clean the seeded secret so the store does not keep an unreadable row.
     await fetch(`${BASE}/api/secrets/${seedId}`, { method: "DELETE" });
 
-    // ---- 5g. The read counter is decided by the database, not by a mutex ----
+    // ---- 5g. A views field in the request cannot bring the limit back ----
     const raceSeed = await fetch(`${BASE}/api/secrets`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        id: randomId(),
         ciphertext: Buffer.alloc(32, 5).toString("base64"),
         iv: Buffer.alloc(12, 6).toString("base64"),
         kind: "text",
@@ -560,16 +641,28 @@ async function openLink(browser, link) {
       }),
     });
     const raceId = (await raceSeed.json()).id;
+    const raceMeta = await (await fetch(`${BASE}/api/secrets/${raceId}`)).json();
+    check(
+      "store: a requested read limit is ignored",
+      raceMeta.viewsAllowed === 0 && raceMeta.viewsLeft === null,
+      `viewsAllowed=${raceMeta.viewsAllowed} viewsLeft=${raceMeta.viewsLeft}`,
+    );
     const [raceA, raceB] = await Promise.all([
       fetch(`${BASE}/api/secrets/${raceId}/open`, { method: "POST" }),
       fetch(`${BASE}/api/secrets/${raceId}/open`, { method: "POST" }),
     ]);
-    const raceCodes = [raceA.status, raceB.status].sort();
     check(
-      "store: two simultaneous opens spend only one read",
-      raceCodes[0] === 200 && raceCodes[1] === 404,
-      raceCodes.join("/"),
+      "store: two simultaneous opens both succeed",
+      raceA.status === 200 && raceB.status === 200,
+      `${raceA.status}/${raceB.status}`,
     );
+    const raceAfter = await (await fetch(`${BASE}/api/secrets/${raceId}`)).json();
+    check(
+      "store: concurrent reads leave it intact",
+      raceAfter.viewsLeft === null,
+      `viewsLeft=${raceAfter.viewsLeft}`,
+    );
+    await fetch(`${BASE}/api/secrets/${raceId}`, { method: "DELETE" });
 
     // ---- 6. Mobile ----
     const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });

@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { ID_RE } from "@/lib/ids";
 import type { KdfPublic, KdfSecret, SealedNote, SecretKind } from "@/lib/types";
 
 /**
@@ -8,7 +8,7 @@ import type { KdfPublic, KdfSecret, SealedNote, SecretKind } from "@/lib/types";
  * The table is sealed: RLS is on with no policies, and every grant is revoked
  * from `anon` / `authenticated`. All access goes through five `security definer`
  * functions exposed over PostgREST, and the publishable key in `.env.local` can
- * only call those. Possession of the 16 character id is the authorisation, which
+ * only call those. Possession of the eight character id is the authorisation, which
  * is the same rule `/s/{id}` already follows.
  */
 
@@ -97,12 +97,6 @@ type RpcResult =
 
 type CreatedRow = { id: string; expiresAt: number; viewsAllowed: number };
 
-const ID_RE = /^[a-f0-9]{16}$/;
-
-function newId(): string {
-  return crypto.randomBytes(8).toString("hex");
-}
-
 function toRecord(raw: RpcRecord): SecretRecord {
   return {
     id: raw.id,
@@ -119,7 +113,14 @@ function toRecord(raw: RpcRecord): SecretRecord {
   };
 }
 
+/**
+ * Stores a secret under an id the caller chose. The client owns the id because
+ * the content key is derived from it before the ciphertext exists, so this
+ * returns null instead of re-rolling: a collision has to be retried by the side
+ * that can re-encrypt.
+ */
 export async function createSecret(input: {
+  id: string;
   ciphertext: string;
   iv: string;
   kind: SecretKind;
@@ -128,30 +129,20 @@ export async function createSecret(input: {
   ttlHours: number;
   kdf?: (KdfPublic & KdfSecret) | null;
   note?: SealedNote | null;
-}): Promise<SecretRecord> {
-  let inserted: CreatedRow | null = null;
-  let id = newId();
+}): Promise<SecretRecord | null> {
+  const inserted = await rpc<CreatedRow | null>("sl_create", {
+    p_id: input.id,
+    p_ciphertext: input.ciphertext,
+    p_iv: input.iv,
+    p_kind: input.kind,
+    p_bytes: input.bytes,
+    p_views: input.views,
+    p_ttl_hours: input.ttlHours,
+    p_kdf: input.kdf ?? null,
+    p_note: input.note ?? null,
+  });
 
-  // `sl_create` inserts with ON CONFLICT DO NOTHING and answers null when the id
-  // already exists, so a collision just means another roll of the dice.
-  for (let attempt = 0; attempt < 4 && !inserted; attempt += 1) {
-    inserted = await rpc<CreatedRow | null>("sl_create", {
-      p_id: id,
-      p_ciphertext: input.ciphertext,
-      p_iv: input.iv,
-      p_kind: input.kind,
-      p_bytes: input.bytes,
-      p_views: input.views,
-      p_ttl_hours: input.ttlHours,
-      p_kdf: input.kdf ?? null,
-      p_note: input.note ?? null,
-    });
-    if (!inserted) id = newId();
-  }
-
-  if (!inserted) {
-    throw new StoreUnavailableError("Could not allocate a unique id.");
-  }
+  if (!inserted) return null;
 
   return {
     id: inserted.id,
