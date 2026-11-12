@@ -13,7 +13,7 @@ import {
   SpinnerIcon as Loader2,
 } from "@/components/icons";
 import { openSecret } from "@/lib/open-secret";
-import { stashRevealText, takeReveal } from "@/lib/handoff";
+import { stashRevealFile, stashRevealText, takeReveal } from "@/lib/handoff";
 import { prepareRaw } from "@/lib/raw-bridge";
 import {
   contentKeyForId,
@@ -25,6 +25,7 @@ import {
 } from "@/lib/crypto";
 import { buildZip } from "@/lib/zip";
 import { formatBytes, formatExpiry } from "@/lib/format";
+import { isTextualFile } from "@/lib/textual";
 import { LIMITS, type SecretInfo } from "@/lib/types";
 
 type Phase = "loading" | "ready" | "gone" | "error";
@@ -325,6 +326,42 @@ export function RevealPanel({ id }: { id: string }) {
 
   const rawAvailable = revealed !== null && revealed.kind === "text";
 
+  /**
+   * One text file inside a file-mode link, opened in the native viewer. Same
+   * handoff as `openRaw`, keyed by the file so the worker answers with just that
+   * file's text; the fallback paints a blob of the same bytes.
+   */
+  const openRawFile = async (
+    event: React.MouseEvent<HTMLAnchorElement>,
+    file: RevealedFileItem,
+    index: number,
+  ) => {
+    event.preventDefault();
+    const href = event.currentTarget.href;
+    const text = new TextDecoder().decode(file.bytes);
+
+    if (revealed?.kind === "file") {
+      stashRevealFile(
+        id,
+        revealed.files.map((entry) => ({
+          name: entry.name,
+          type: entry.type,
+          bytes: entry.bytes,
+        })),
+      );
+    }
+
+    if (await prepareRaw(id, text, index)) {
+      window.location.assign(href);
+      return;
+    }
+
+    const url = URL.createObjectURL(
+      new Blob([text], { type: "text/plain;charset=utf-8" }),
+    );
+    window.location.assign(url);
+  };
+
   return (
     <main className="mx-auto flex min-h-[calc(100dvh-4rem)] w-full max-w-[600px] flex-col justify-center px-6 py-14">
       <div className="rounded-[20px] border border-line bg-card">
@@ -488,7 +525,7 @@ export function RevealPanel({ id }: { id: string }) {
             ) : (
               <>
                 <div className="flex max-h-[280px] flex-col gap-1.5 overflow-auto">
-                  {revealed.files.map((file) => (
+                  {revealed.files.map((file, index) => (
                     <div
                       key={file.url}
                       className="flex items-center gap-3 rounded-[10px] border border-line bg-inset px-4 py-3"
@@ -498,7 +535,19 @@ export function RevealPanel({ id }: { id: string }) {
                         strokeWidth={1.5}
                       />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] text-ink">{file.name}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-[13px] text-ink">{file.name}</p>
+                          {isTextualFile(file.name, file.type) ? (
+                            <a
+                              href={`/s/${id}/raw?file=${index}`}
+                              onClick={(event) => openRawFile(event, file, index)}
+                              aria-label={`Open ${file.name} as raw text`}
+                              className="shrink-0 rounded-[6px] border border-line-strong px-1.5 py-0.5 font-mono text-[10px] text-ink-3 transition-colors duration-150 hover:bg-raise hover:text-ink"
+                            >
+                              Raw
+                            </a>
+                          ) : null}
+                        </div>
                         <p className="font-mono text-[11px] text-ink-3">
                           {formatBytes(file.size)}
                         </p>

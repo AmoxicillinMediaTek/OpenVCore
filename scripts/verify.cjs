@@ -274,6 +274,39 @@ async function openLink(browser, link) {
       `${zippedSample.length}+${zippedExtra.length} bytes`,
     );
     await r2.screenshot({ path: `${OUT}/reveal-file-zip.png` });
+
+    // ---- 2c. Raw per file: text files only, one file per view ----
+    const rawButtons = r2.locator('a[aria-label$="as raw text"]');
+    check("file raw: only the text file offers a raw view", (await rawButtons.count()) === 1, "1");
+    const rawNotes = r2.locator('a[aria-label="Open notes.txt as raw text"]');
+    check("file raw: the button sits on the text file", (await rawNotes.count()) === 1, "notes.txt");
+    const rawNotesHref = await rawNotes.getAttribute("href");
+    check(
+      "file raw: it points at /raw?file=<index> with no fragment",
+      /^\/s\/[a-z0-9]{8}\/raw\?file=\d+$/.test(rawNotesHref ?? ""),
+      String(rawNotesHref),
+    );
+
+    await rawNotes.click();
+    await r2.waitForURL(/\/raw\?file=\d+$/, { timeout: 20000 });
+    await r2.waitForTimeout(400);
+    const fileRawType = await r2.evaluate(() => document.contentType);
+    check("file raw: the browser sees a text/plain document", fileRawType === "text/plain", fileRawType);
+    const fileRawText = (await r2.evaluate(() => document.body.innerText)).trim();
+    check(
+      "file raw: the view holds just that file",
+      fileRawText === extraBytes.toString("utf8").trim(),
+      fileRawText,
+    );
+    await r2.screenshot({ path: `${OUT}/raw-file.png` });
+
+    await r2.goBack();
+    await r2.waitForSelector("a[download]", { timeout: 20000 });
+    const backRows = await r2.locator("a[download]").count();
+    check("file raw: back returns to the opened file list", backRows === 2, String(backRows));
+
+    const listingRaw = await fetch(`${BASE}/api/secrets/${t2.link.split("/s/")[1]}`).then((res) => res.json());
+    check("file raw: none of it spent a read", listingRaw.viewsLeft === null, String(listingRaw.viewsLeft));
     await r2.close();
 
     // ---- 3. Password: no fragment, wrong pass does not burn ----
@@ -307,6 +340,32 @@ async function openLink(browser, link) {
     check("password: correct pass decrypts", passText === "vault-token-771", passText);
     await r3.screenshot({ path: `${OUT}/reveal-password.png` });
     await r3.close();
+
+    // A locked link's raw view needs the password appended to the URL.
+    const rawPrompt = await fetch(`${BASE}/s/${id3}/raw`);
+    const rawPromptBody = await rawPrompt.text();
+    check(
+      "password raw: no password explains how to add one",
+      rawPrompt.status === 200 && rawPromptBody.includes(`/s/${id3}/raw/`),
+      rawPromptBody.split("\n")[0],
+    );
+    const rawWrong = await fetch(`${BASE}/s/${id3}/raw/not-the-password`);
+    check("password raw: a wrong password is refused", rawWrong.status === 401, String(rawWrong.status));
+    const rawLocked = await fetch(`${BASE}/s/${id3}/raw/${encodeURIComponent(passphrase)}`);
+    const rawLockedBody = (await rawLocked.text()).trim();
+    check(
+      "password raw: the right password returns the plaintext",
+      rawLocked.status === 200 && rawLockedBody === "vault-token-771",
+      rawLockedBody,
+    );
+    const rawLockedQuery = await fetch(
+      `${BASE}/s/${id3}/raw?p=${encodeURIComponent(passphrase)}`,
+    );
+    check(
+      "password raw: ?p= works too",
+      rawLockedQuery.status === 200,
+      String(rawLockedQuery.status),
+    );
 
     // ---- 4. Readers: many reads leave the payload intact ----
     const t4 = await createSecret(browser, { text: "many-reader secret" });
@@ -404,8 +463,8 @@ async function openLink(browser, link) {
       String(rawHref),
     );
 
-    // The read did not consume the secret, so the server still has it — but it
-    // still cannot produce the plaintext, which is why the worker answers instead.
+    // The read did not consume the secret, so the server still has it. The key is
+    // a hash of the id, so a request with no tab behind it can be opened here too.
     const rawId = rawHref.split("/")[2];
     const stillStored = await (
       await fetch(`${BASE}/api/secrets/${rawId}`)
@@ -413,13 +472,21 @@ async function openLink(browser, link) {
     check("raw: opening a link does not delete it", stillStored === 200, String(stillStored));
 
     const direct = await fetch(`${BASE}${rawHref}`);
-    const directBody = await direct.text();
+    const directBody = (await direct.text()).trim();
     check(
       "raw: a direct request answers text/plain",
-      (direct.headers.get("content-type") ?? "").startsWith("text/plain") &&
-        directBody.includes("only be shown as raw text"),
+      (direct.headers.get("content-type") ?? "").startsWith("text/plain"),
       direct.headers.get("content-type") ?? "",
     );
+    check("raw: a direct request returns the plaintext", directBody === "raw-view-secret", directBody);
+    const afterDirect = await (await fetch(`${BASE}/api/secrets/${rawId}`)).json();
+    check(
+      "raw: a direct request spends no read",
+      afterDirect.viewsLeft === null,
+      String(afterDirect.viewsLeft),
+    );
+    const unknown = await fetch(`${BASE}/s/zzzzzzzz/raw`);
+    check("raw: an unknown id answers 404", unknown.status === 404, String(unknown.status));
 
     await rawLink.click();
     await r7.waitForURL(/\/raw/, { timeout: 20000 });

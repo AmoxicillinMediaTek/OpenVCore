@@ -31,6 +31,21 @@ Development:
 npm run dev
 ```
 
+## Layout
+
+```
+src/app/          routes and route handlers
+src/components/   client components
+src/lib/          crypto, store, zip, raw handoff
+src/public/       static assets: brand mark, service worker
+public -> src/public
+```
+
+Every application folder lives under `src/`; `tsconfig.json` maps `@/*` to `./src/*`.
+Next resolves `public/` from the project root only, so a root symlink points at
+`src/public`. The symlink is read when the server boots, so restart after adding an
+asset there.
+
 ## Configuration
 
 | Variable       | Default | Purpose                                             |
@@ -76,7 +91,7 @@ Zero rows means missing or expired, and the function says which. `views_used` is
 only as a record of how often the link was opened; `views_allowed` stays `0`, which is
 the "no limit" value, so an open never deletes the row.
 
-A store outage surfaces as 503, never as 404 or 410 (`lib/api-errors.ts`), so a
+A store outage surfaces as 503, never as 404 or 410 (`src/lib/api-errors.ts`), so a
 database hiccup can never look like a burned link.
 
 ## The link ledger
@@ -106,7 +121,7 @@ create. The route never trusts the rest: it derives `kind`, `locked`, `views_all
 and `expires_at` from the stored secret, rejects ids that do not exist, and validates
 that `link` is an absolute `http(s)` URL whose path is `/s/{id}`.
 
-Writes go through PostgREST with the publishable key (`lib/ledger.ts`, plain `fetch`,
+Writes go through PostgREST with the publishable key (`src/lib/ledger.ts`, plain `fetch`,
 no client library). `public.links` has RLS enabled with a single insert-only policy for
 `anon` and `authenticated`, so the browser-visible key can add rows and read nothing.
 Duplicates are ignored via `Prefer: resolution=ignore-duplicates`. If the insert fails
@@ -158,16 +173,18 @@ PBKDF2-derived key.
 ## The raw view
 
 `/s/{id}/raw` is not a page. It is a route handler returning `text/plain; charset=utf-8`
-(`app/s/[id]/raw/route.ts`), so the browser paints it with its own plain-text viewer —
+(`src/app/s/[id]/raw/[[...password]]/route.ts`), so the browser paints it with its own
+plain-text viewer —
 no app chrome, no stylesheet, no react tree. The button appears on the styled page only
 after the secret has been opened, so it never competes with `Open` and never offers a
 link to something still sealed.
 
-The server cannot fill that response: it never derives the content key, so the tab that
-already decrypted the secret answers the request itself:
+The key is a hash of the id, so the handler can open the payload by itself. It uses
+`peekSecret`, never `consumeSecret`, so a raw view costs no read. When a tab has already
+decrypted the secret, that tab answers the request first and no network call happens:
 
 1. The tab hands its plaintext to the Cache API under `__openvcore-raw/{id}` and
-   registers `public/raw-sw.js` for scope `/s/` (`lib/raw-bridge.ts`).
+   registers `src/public/raw-sw.js` for scope `/s/` (`src/lib/raw-bridge.ts`).
 2. The browser navigates to `/s/{id}/raw` as a document request.
 3. The worker matches that URL, reads the stash, **deletes it**, and responds with the
    bytes as `text/plain`. One shot: the entry is gone before the document renders.
@@ -179,12 +196,30 @@ a `blob:` origin — the URL cannot keep its `/raw` shape without a worker.
 
 Coming back is plain browser back. The worker does not intercept the return trip; the
 styled page restores what it opened from `sessionStorage` (`openvcore.reveal.{id}` in
-`lib/handoff.ts`), which also covers a reload that misses the back/forward cache. Files
+`src/lib/handoff.ts`), which also covers a reload that misses the back/forward cache. Files
 travel as base64 in the same entry.
 
-A bare `/s/{id}/raw` requested cold — no stash, no worker, curl — answers with a short
-`text/plain` note explaining that the plaintext only exists in the tab that opened the
-secret. It never leaks a hint about whether the id exists.
+A cold request — no stash, no worker, curl — is answered by the route handler: it looks
+the secret up, derives the key from the id in the URL, decrypts, and returns the text.
+Text secrets come back verbatim; a single text file comes back as its contents, a
+multi-file secret as a name and size listing. Unknown ids answer `404`, expired links
+`410`.
+
+A file-mode link shows a small `Raw` button beside every file whose bytes are text —
+`src/lib/textual.ts` decides from the MIME type and then the extension, so a `.json`, `.md`,
+`.csv`, or `.env` qualifies and a `.png` does not. The button points at
+`/s/{id}/raw?file={index}` (the handler also takes `?file={name}`), which returns just
+that entry, `415` when it is not text, `404` when no entry matches. The service worker
+stashes per-file text under the same selector, so the in-tab click still makes no network
+request.
+
+A password-protected link has its content key wrapped under a PBKDF2 key, so the password
+travels in the URL: `/s/{id}/raw/{password}` or `/s/{id}/raw?p={password}`. With neither,
+the handler answers with the exact address shape to paste, using the id it was asked for.
+A wrong password is `401` and counts against a per-id, per-client budget of ten attempts
+per ten minutes, then `429` for the rest of the window. Right or wrong, the response sets
+`Referrer-Policy: no-referrer` so the password in the path never rides out on a link.
+
 
 The document hides `<link rel="icon">` from the browser, so `next.config.ts` rewrites
 `/favicon.ico` onto `/icon.png`; without it every raw view logs a 404.

@@ -37,13 +37,20 @@ async function activeRegistration(): Promise<ServiceWorkerRegistration | null> {
 }
 
 /** Stash the plaintext for the next `/raw` navigation. False means "use a blob". */
-export async function prepareRaw(id: string, text: string): Promise<boolean> {
+export async function prepareRaw(
+  id: string,
+  text: string,
+  file?: number | string,
+): Promise<boolean> {
   try {
     const registration = await activeRegistration();
     if (!registration) return false;
 
     const cache = await caches.open(CACHE);
-    const key = new URL(STASH_PATH + id, window.location.origin).toString();
+    const key = new URL(
+      STASH_PATH + id + (file === undefined ? "" : `-${file}`),
+      window.location.origin,
+    ).toString();
     await cache.put(
       key,
       new Response(text, { headers: { "Content-Type": "text/plain; charset=utf-8" } }),

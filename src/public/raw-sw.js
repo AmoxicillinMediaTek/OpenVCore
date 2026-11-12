@@ -1,12 +1,14 @@
 // Service worker for /s/{id}/raw, scope /s/.
 //
 // The raw page is a real text/plain response so the browser renders it with its
-// own plain-text viewer instead of a styled React page. The server cannot answer
-// that request with the plaintext: the content key is derived in the browser and
-// never reaches it. So the tab that already decrypted the secret stashes it in
-// the Cache API, navigates, and
-// this worker answers the navigation with those bytes. One stash entry, consumed
-// and deleted on the way out, never touching the network.
+// own plain-text viewer instead of a styled React page. When the tab that opened
+// the secret asks for it, that tab stashes the bytes in the Cache API, navigates,
+// and this worker answers the navigation from the stash: one entry, consumed and
+// deleted on the way out, never touching the network. A cold request falls
+// through to the route handler, which can open the link by itself.
+//
+// The stash is keyed by id plus the `?file=` selector, because the opened link
+// offers a raw view per text file as well as for the whole secret.
 
 const CACHE = "openvcore-raw-v1";
 const STASH_PATH = "/__openvcore-raw/";
@@ -41,12 +43,17 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(answer(url));
 });
 
+function stashKey(id, url) {
+  const file = url.searchParams.get("file");
+  return new URL(STASH_PATH + id + (file === null ? "" : `-${file}`), url.origin).toString();
+}
+
 async function answer(url) {
   const id = url.pathname.split("/")[2];
 
   try {
     const cache = await caches.open(CACHE);
-    const key = new URL(STASH_PATH + id, url.origin).toString();
+    const key = stashKey(id, url);
     const hit = await cache.match(key);
 
     if (hit) {
@@ -59,6 +66,7 @@ async function answer(url) {
           "Content-Type": "text/plain; charset=utf-8",
           "Content-Disposition": "inline",
           "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
           "X-Content-Type-Options": "nosniff",
         },
       });
@@ -67,7 +75,7 @@ async function answer(url) {
     // Fall through to the server rather than failing the navigation.
   }
 
-  // No stash: nothing in this browser holds the plaintext. The route handler
-  // explains that as plain text.
+  // No stash in this browser: the route handler opens the link itself, and its
+  // answer (plaintext, password prompt, or refusal) is already plain text.
   return fetch(url.toString(), { cache: "no-store" });
 }
