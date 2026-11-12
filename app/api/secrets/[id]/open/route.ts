@@ -10,8 +10,8 @@ const NO_STORE = { "Cache-Control": "no-store" } as const;
 
 /**
  * Spends one view and returns the sealed payload.
- * The key needed to open it is not here: it lives in the link fragment or
- * in the passphrase, neither of which this process has seen.
+ * The key needed to open it is not here: it is derived in the browser from the
+ * id, or unwrapped from the passphrase, neither of which this process has seen.
  */
 export async function POST(
   _request: Request,

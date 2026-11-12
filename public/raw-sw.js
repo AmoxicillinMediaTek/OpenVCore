@@ -2,9 +2,9 @@
 //
 // The raw page is a real text/plain response so the browser renders it with its
 // own plain-text viewer instead of a styled React page. The server cannot answer
-// that request: the key lives in the URL fragment, which never leaves the tab,
-// and the sealed blob is deleted the moment its last read is spent. So the tab
-// that already decrypted the secret stashes it in the Cache API, navigates, and
+// that request with the plaintext: the content key is derived in the browser and
+// never reaches it. So the tab that already decrypted the secret stashes it in
+// the Cache API, navigates, and
 // this worker answers the navigation with those bytes. One stash entry, consumed
 // and deleted on the way out, never touching the network.
 

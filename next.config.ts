@@ -16,7 +16,8 @@ const nextConfig: NextConfig = {
       {
         source: "/:path*",
         headers: [
-          // A shared link carries its key in the fragment. Never leak it in a Referer.
+          // The id in a shared link is harmless, but a tighter referrer policy keeps
+          // the link itself out of third-party request headers.
           { key: "Referrer-Policy", value: "no-referrer" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },

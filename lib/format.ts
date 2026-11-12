@@ -28,13 +28,3 @@ export function formatExpiry(expiresAt: number, now = Date.now()): string {
 export function formatExpiryLifetime(expiresAt: number): string {
   return expiresAt === 0 ? "No expiry" : formatExpiry(expiresAt);
 }
-
-/** Shorten a long link for display without losing the id. */
-export function shortenLink(link: string): string {
-  const hashIndex = link.indexOf("#");
-  if (hashIndex === -1) return link;
-  const base = link.slice(0, hashIndex);
-  const fragment = link.slice(hashIndex + 1);
-  if (fragment.length <= 12) return link;
-  return `${base}#${fragment.slice(0, 6)}…${fragment.slice(-4)}`;
-}

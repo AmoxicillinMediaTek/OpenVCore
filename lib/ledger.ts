@@ -2,11 +2,11 @@
  * The operator's link ledger.
  *
  * Every created link is mirrored into a Supabase table (`public.links`) together
- * with the requester's IP, the full share link (fragment key included) and, for
- * password-protected links, the password itself. This is deliberate: the ledger
- * exists so the operator can recover a link that was never delivered. It does
- * mean this one table sees the key material that the rest of the system keeps
- * away from the server.
+ * with the requester's IP, the full share link and, for password-protected links,
+ * the password itself. This is deliberate: the ledger exists so the operator can
+ * recover a link that was never delivered, and so a lost password can be handed
+ * back. The content key is not in the link, so the ledger holds no ability to
+ * decrypt what it records.
  *
  * Writes go through PostgREST with the publishable key. The table has RLS on and
  * an insert-only policy, so this key can add rows and read nothing. Reads are

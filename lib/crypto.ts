@@ -28,7 +28,7 @@ export function fromBase64(value: string): Uint8Array {
   return out;
 }
 
-/** URL-safe, unpadded. The fragment of the share link. */
+/** URL-safe, unpadded. Used for the sealed envelope, never for the share link. */
 export function toBase64Url(bytes: Uint8Array): string {
   return toBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
