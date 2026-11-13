@@ -411,8 +411,7 @@ export function RevealPanel({ id }: { id: string }) {
 
         {phase === "ready" && info && !revealed ? (
           <div className="flex flex-col gap-6 p-8">
-            <div className="flex items-center justify-between gap-4">
-              <p className="font-mono text-[11px] text-ink-3">Encrypted secret</p>
+            <div className="flex items-center justify-end gap-4">
               <span className="font-mono text-[11px] text-ink-3">
                 {formatExpiry(info.expiresAt)}
               </span>
@@ -480,7 +479,7 @@ export function RevealPanel({ id }: { id: string }) {
               {busy ? (
                 <>
                   <Loader2 className="size-4 animate-spin" strokeWidth={1.5} />
-                  Decrypting
+                  Opening…
                 </>
               ) : (
                 "Open"
