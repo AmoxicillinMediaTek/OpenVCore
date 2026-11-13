@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   AlertCircleIcon as AlertCircle,
   CheckIcon as Check,
@@ -28,7 +28,6 @@ import { newSecretId } from "@/lib/ids";
 import {
   formatBytes,
   formatChars,
-  formatExpiryLifetime,
 } from "@/lib/format";
 import { LIMITS, TTL_OPTIONS } from "@/lib/types";
 
@@ -361,9 +360,7 @@ export function CreatePanel() {
                 </div>
               ) : null}
 
-              <p className="font-mono text-[11px] text-ink-3">
-                {formatExpiryLifetime(created.expiresAt)}
-              </p>
+              <ExpiryTimer expiresAt={created.expiresAt} />
 
             </>
           )}
@@ -723,4 +720,46 @@ function Select({
       />
     </div>
   );
+}
+
+/**
+ * Live countdown to the link's expiry. Ticks once a second from the wall clock
+ * rather than decrementing a counter, so a backgrounded tab that stops firing
+ * timers still shows the right number when it wakes.
+ */
+function ExpiryTimer({ expiresAt }: { expiresAt: number }) {
+  const [left, setLeft] = useState(() => (expiresAt === 0 ? 0 : expiresAt - Date.now()));
+
+  useEffect(() => {
+    if (expiresAt === 0) return;
+    const tick = () => setLeft(expiresAt - Date.now());
+    tick();
+    const handle = window.setInterval(tick, 1000);
+    return () => window.clearInterval(handle);
+  }, [expiresAt]);
+
+  if (expiresAt === 0) {
+    return <p className="font-mono text-[11px] text-ink-3">no expiry</p>;
+  }
+
+  return (
+    <p className="font-mono text-[11px] tabular-nums text-ink-3">
+      {countdown(left)} left
+    </p>
+  );
+}
+
+function countdown(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+
+  const clock =
+    `${String(hours).padStart(2, "0")}:` +
+    `${String(minutes).padStart(2, "0")}:` +
+    `${String(seconds).padStart(2, "0")}`;
+
+  return days > 0 ? `${days}d ${clock}` : clock;
 }
