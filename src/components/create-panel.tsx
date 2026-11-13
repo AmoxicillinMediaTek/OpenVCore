@@ -110,7 +110,7 @@ export function CreatePanel() {
     setError(null);
 
     if (mode === "text" && text.trim().length === 0) {
-      setError("Nothing to seal yet.");
+      setError("No text to create.");
       return;
     }
     if (mode === "text" && text.length > LIMITS.maxTextChars) {
@@ -118,7 +118,7 @@ export function CreatePanel() {
       return;
     }
     if (mode === "file" && files.length === 0) {
-      setError("Choose a file first.");
+      setError("No file to create.");
       return;
     }
     if (mode === "url") {
