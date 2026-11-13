@@ -49,6 +49,9 @@ async function createSecret(browser, { mode = "text", text, file, files, ttl, pa
   if (mode === "file") {
     await page.click('button[role="tab"]:has-text("File")');
     await page.setInputFiles('input[type="file"]', files ?? file);
+  } else if (mode === "url") {
+    await page.click('button[role="tab"]:has-text("URL")');
+    await page.fill('input[type="url"]', text);
   } else {
     await page.fill("textarea", text);
   }
@@ -195,6 +198,55 @@ async function openLink(browser, link) {
     check("text: a second reader still opens it", againText === textSecret, againText);
     await again.screenshot({ path: `${OUT}/reveal-second-read.png` });
     await again.close();
+
+    // ---- 1b. URL mode: the link opens the target instead of a page ----
+    const urlTarget = `${BASE}/#url-target`;
+    const t1b = await createSecret(browser, { mode: "url", text: urlTarget });
+    track(t1b.page);
+    check("url: link created", /\/s\/[a-z0-9]{8}$/.test(t1b.link), t1b.link);
+    check(
+      "url: mode hides the note and the password toggle",
+      (await t1b.page.locator("form input[type='text']").count()) === 0 &&
+        (await t1b.page.locator("button:has-text('Add a password')").count()) === 0,
+      "hidden",
+    );
+    await t1b.page.screenshot({ path: `${OUT}/url-created.png` });
+    await t1b.page.close();
+
+    const id1b = t1b.link.split("/s/")[1];
+    const firstOpen = await fetch(`${BASE}/s/${id1b}`, { redirect: "manual" });
+    check(
+      "url: opening the link answers with a redirect",
+      firstOpen.status === 307 || firstOpen.status === 308,
+      String(firstOpen.status),
+    );
+    check(
+      "url: the redirect points at the typed address",
+      firstOpen.headers.get("location") === urlTarget,
+      String(firstOpen.headers.get("location")),
+    );
+
+    const secondOpen = await fetch(`${BASE}/s/${id1b}`, { redirect: "manual" });
+    check(
+      "url: a second visit redirects the same way",
+      secondOpen.status === firstOpen.status &&
+        secondOpen.headers.get("location") === urlTarget,
+      String(secondOpen.status),
+    );
+
+    const urlRaw = await fetch(`${BASE}/s/${id1b}/raw`);
+    check("url: no raw view on a redirect link", urlRaw.status === 404, String(urlRaw.status));
+
+    const urlMeta = await (await fetch(`${BASE}/api/secrets/${id1b}`)).json();
+    check("url: kind is recorded as url", urlMeta.kind === "url", String(urlMeta.kind));
+    check("url: visits spend no read", urlMeta.viewsLeft === null, String(urlMeta.viewsLeft));
+
+    const urlVisit = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    track(urlVisit);
+    await urlVisit.goto(t1b.link, { waitUntil: "domcontentloaded" });
+    await urlVisit.waitForTimeout(500);
+    check("url: the browser lands on the target", urlVisit.url() === urlTarget, urlVisit.url());
+    await urlVisit.close();
 
     // ---- 2. Files: two uploads, per-file download, one zip ----
     const samplePath = "/tmp/opencode/sample.bin";

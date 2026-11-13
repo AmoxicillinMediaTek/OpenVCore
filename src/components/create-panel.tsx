@@ -7,6 +7,7 @@ import {
   ChevronDownIcon as ChevronDown,
   CopyIcon as Copy,
   FileTextIcon as FileText,
+  LinkIcon as Link2,
   LockIcon as Lock,
   PaperclipIcon as Paperclip,
   QrCodeIcon as QrCode,
@@ -31,7 +32,7 @@ import {
 } from "@/lib/format";
 import { LIMITS, TTL_OPTIONS } from "@/lib/types";
 
-type Mode = "text" | "file";
+type Mode = "text" | "file" | "url";
 
 interface Created {
   id: string;
@@ -44,6 +45,7 @@ export function CreatePanel() {
   const [mode, setMode] = useState<Mode>("text");
   const [note, setNote] = useState("");
   const [text, setText] = useState("");
+  const [url, setUrl] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [ttl, setTtl] = useState(24);
   const [usePass, setUsePass] = useState(false);
@@ -59,6 +61,7 @@ export function CreatePanel() {
   const fileInput = useRef<HTMLInputElement>(null);
   const noteId = useId();
   const textId = useId();
+  const urlId = useId();
   const ttlId = useId();
   const passId = useId();
 
@@ -70,6 +73,7 @@ export function CreatePanel() {
     setError(null);
     setNote("");
     setText("");
+    setUrl("");
     setFiles([]);
     setPass("");
     setUsePass(false);
@@ -117,6 +121,23 @@ export function CreatePanel() {
       setError("Choose a file first.");
       return;
     }
+    if (mode === "url") {
+      const raw = url.trim();
+      if (raw.length === 0) {
+        setError("Paste a link first.");
+        return;
+      }
+      try {
+        const parsed = new URL(raw);
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+          setError("Only http and https links.");
+          return;
+        }
+      } catch {
+        setError("That is not a full link. It needs https:// in front.");
+        return;
+      }
+    }
     if (note.trim().length > LIMITS.maxNoteChars) {
       setError(`The note is capped at ${LIMITS.maxNoteChars} characters.`);
       return;
@@ -139,9 +160,9 @@ export function CreatePanel() {
                 })),
               ),
             )
-          : new TextEncoder().encode(text);
+          : new TextEncoder().encode(mode === "url" ? url.trim() : text);
 
-      const noteText = note.trim();
+      const noteText = mode === "url" ? "" : note.trim();
       let saved: { id: string; expiresAt: number } | null = null;
 
       // The id is chosen here, not by the server, because the content key derives
@@ -159,7 +180,7 @@ export function CreatePanel() {
           : null;
 
         let kdf: Record<string, unknown> | undefined;
-        if (usePass) {
+        if (usePass && mode !== "url") {
           const salt = randomBytes(16);
           const passKey = await derivePassphraseKey(pass, salt);
           const wrapped = await wrapContentKey(passKey, rawKey);
@@ -210,7 +231,7 @@ export function CreatePanel() {
         id: saved.id,
         link,
         expiresAt: saved.expiresAt,
-        locked: usePass,
+        locked: usePass && mode !== "url",
       });
 
       // Mirror the finished link into the operator ledger. Fire and forget: the
@@ -222,7 +243,7 @@ export function CreatePanel() {
         body: JSON.stringify({
           id: saved.id,
           link,
-          password: usePass ? pass : null,
+          password: usePass && mode !== "url" ? pass : null,
         }),
         keepalive: true,
       }).catch(() => null);
@@ -370,32 +391,34 @@ export function CreatePanel() {
         </div>
       ) : (
         <form onSubmit={submit} className="flex flex-col gap-5 p-6">
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between gap-3">
-              <label htmlFor={noteId} className="text-[11px] text-ink-2">
-                Note
-              </label>
-              <span className="font-mono text-[10px] text-ink-3">
-                {note.trim().length > 0
-                  ? `${note.trim().length}/${LIMITS.maxNoteChars}`
-                  : "optional · shown as the heading"}
-              </span>
+          {mode === "url" ? null : (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between gap-3">
+                <label htmlFor={noteId} className="text-[11px] text-ink-2">
+                  Note
+                </label>
+                <span className="font-mono text-[10px] text-ink-3">
+                  {note.trim().length > 0
+                    ? `${note.trim().length}/${LIMITS.maxNoteChars}`
+                    : "optional · shown as the heading"}
+                </span>
+              </div>
+              <input
+                id={noteId}
+                type="text"
+                value={note}
+                onChange={(event) => {
+                  setNote(event.target.value);
+                  setError(null);
+                }}
+                maxLength={LIMITS.maxNoteChars}
+                placeholder="For the person opening it — e.g. The vault code"
+                spellCheck={false}
+                autoComplete="off"
+                className="h-10 w-full rounded-[10px] border border-line bg-inset px-3.5 text-[13px] text-ink outline-none transition-colors duration-150 focus:border-line-strong placeholder:text-ink-3"
+              />
             </div>
-            <input
-              id={noteId}
-              type="text"
-              value={note}
-              onChange={(event) => {
-                setNote(event.target.value);
-                setError(null);
-              }}
-              maxLength={LIMITS.maxNoteChars}
-              placeholder="For the person opening it — e.g. The vault code"
-              spellCheck={false}
-              autoComplete="off"
-              className="h-10 w-full rounded-[10px] border border-line bg-inset px-3.5 text-[13px] text-ink outline-none transition-colors duration-150 focus:border-line-strong placeholder:text-ink-3"
-            />
-          </div>
+          )}
 
           <div className="flex items-center justify-between gap-4">
             <div
@@ -407,6 +430,7 @@ export function CreatePanel() {
                 [
                   { value: "text", label: "Text", icon: FileText },
                   { value: "file", label: "File", icon: Paperclip },
+                  { value: "url", label: "URL", icon: Link2 },
                 ] as const
               ).map((tab) => {
                 const active = mode === tab.value;
@@ -453,7 +477,7 @@ export function CreatePanel() {
                 <span>{LIMITS.maxTextChars.toLocaleString("en-US")} max</span>
               </div>
             </div>
-          ) : (
+          ) : mode === "file" ? (
             <div
               onDragOver={(event) => {
                 event.preventDefault();
@@ -533,6 +557,29 @@ export function CreatePanel() {
                 onChange={(event) => addFiles(event.target.files)}
               />
             </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 rounded-[10px] border border-line bg-inset px-3 focus-within:border-line-strong">
+                <Link2 className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.5} />
+                <label htmlFor={urlId} className="sr-only">
+                  Link to open
+                </label>
+                <input
+                  id={urlId}
+                  type="url"
+                  value={url}
+                  onChange={(event) => {
+                    setUrl(event.target.value);
+                    setError(null);
+                  }}
+                  placeholder="https://example.com/path"
+                  spellCheck={false}
+                  autoComplete="off"
+                  inputMode="url"
+                  className="h-11 w-full bg-transparent font-mono text-[13px] text-ink outline-none placeholder:text-ink-3"
+                />
+              </div>
+            </div>
           )}
 
           <div className="grid grid-cols-1 gap-3">
@@ -549,51 +596,53 @@ export function CreatePanel() {
             </Field>
           </div>
 
-          <div className="flex flex-col gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                setUsePass(!usePass);
-                setError(null);
-              }}
-              className="flex items-center gap-2 self-start text-[12px] text-ink-3 transition-colors duration-150 hover:text-ink-2"
-              aria-pressed={usePass}
-            >
-              <span
-                className={`flex size-3.5 items-center justify-center rounded-[3px] border transition-colors duration-150 ${
-                  usePass ? "border-ember bg-ember" : "border-line-strong"
-                }`}
+          {mode === "url" ? null : (
+            <div className="flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setUsePass(!usePass);
+                  setError(null);
+                }}
+                className="flex items-center gap-2 self-start text-[12px] text-ink-3 transition-colors duration-150 hover:text-ink-2"
+                aria-pressed={usePass}
               >
-                {usePass ? (
-                  <Check className="size-2.5 text-page" strokeWidth={2.5} />
-                ) : null}
-              </span>
-              Add a password
-            </button>
+                <span
+                  className={`flex size-3.5 items-center justify-center rounded-[3px] border transition-colors duration-150 ${
+                    usePass ? "border-ember bg-ember" : "border-line-strong"
+                  }`}
+                >
+                  {usePass ? (
+                    <Check className="size-2.5 text-page" strokeWidth={2.5} />
+                  ) : null}
+                </span>
+                Add a password
+              </button>
 
-            {usePass ? (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2 rounded-[10px] border border-line bg-inset px-3">
-                  <Lock className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.5} />
-                  <label htmlFor={passId} className="sr-only">
-                    Password
-                  </label>
-                  <input
-                    id={passId}
-                    type="password"
-                    value={pass}
-                    onChange={(event) => setPass(event.target.value)}
-                    placeholder="At least 8 characters"
-                    autoComplete="new-password"
-                    className="h-10 w-full bg-transparent font-mono text-[13px] text-ink outline-none placeholder:text-ink-3"
-                  />
+              {usePass ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2 rounded-[10px] border border-line bg-inset px-3">
+                    <Lock className="size-3.5 shrink-0 text-ink-3" strokeWidth={1.5} />
+                    <label htmlFor={passId} className="sr-only">
+                      Password
+                    </label>
+                    <input
+                      id={passId}
+                      type="password"
+                      value={pass}
+                      onChange={(event) => setPass(event.target.value)}
+                      placeholder="At least 8 characters"
+                      autoComplete="new-password"
+                      className="h-10 w-full bg-transparent font-mono text-[13px] text-ink outline-none placeholder:text-ink-3"
+                    />
+                  </div>
+                  <p className="text-[12px] leading-4 text-ink-3">
+                    The link will not contain the key. Send the password another way.
+                  </p>
                 </div>
-                <p className="text-[12px] leading-4 text-ink-3">
-                  The link will not contain the key. Send the password another way.
-                </p>
-              </div>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          )}
 
           {error ? (
             <p className="flex items-start gap-2 text-[12px] leading-4 text-bad">

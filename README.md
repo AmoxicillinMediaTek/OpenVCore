@@ -170,6 +170,15 @@ password links. That is not a new exposure: the `check` constant already lets an
 holding the link test guesses offline, and the wrapped key is protected by the same
 PBKDF2-derived key.
 
+## URL links
+
+The third tab stores a target address instead of a document. The visitor never sees a
+reveal page: `/s/{id}` looks the link up, decrypts the target with the key derived from
+the id, and answers `307` with it in `Location`. It peeks rather than consumes, so the
+link survives every visit until it expires or the sender deletes it. There is no `/raw`
+view for these — the route answers `404` — and the password toggle is hidden, because a
+redirect has to be readable by the server at visit time.
+
 ## The raw view
 
 `/s/{id}/raw` is not a page. It is a route handler returning `text/plain; charset=utf-8`

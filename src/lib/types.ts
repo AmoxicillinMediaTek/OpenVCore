@@ -1,4 +1,4 @@
-export type SecretKind = "text" | "file";
+export type SecretKind = "text" | "file" | "url";
 
 /**
  * Everything the browser needs to derive the passphrase key before spending a

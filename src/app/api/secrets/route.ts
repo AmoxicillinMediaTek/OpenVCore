@@ -42,8 +42,9 @@ export async function POST(request: Request) {
   if (!isBase64(body.ciphertext)) return fail("ciphertext must be base64.");
   if (!isBase64(body.iv, 12)) return fail("iv must be 12 bytes of base64.");
 
-  const kind = body.kind === "file" ? "file" : body.kind === "text" ? "text" : null;
-  if (!kind) return fail("kind must be text or file.");
+  const kind =
+    body.kind === "file" ? "file" : body.kind === "url" ? "url" : body.kind === "text" ? "text" : null;
+  if (!kind) return fail("kind must be text, file or url.");
 
   const ttlHours = Number(body.ttlHours ?? 24);
   if (!Number.isFinite(ttlHours) || ttlHours < 0 || ttlHours > LIMITS.maxTtlHours) {

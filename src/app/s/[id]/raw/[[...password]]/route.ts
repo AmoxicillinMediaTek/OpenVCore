@@ -94,6 +94,9 @@ export async function GET(
     }
   }
 
+  // A url link is a redirect, not a document: nothing to print here.
+  if (record.kind === "url") return plain("This link has no text view.", 404);
+
   if (record.kind === "text") return plain(new TextDecoder().decode(plaintext));
 
   let files: FileEntry[];
