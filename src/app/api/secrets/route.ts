@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const B64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
-// 10 MB of raw bytes becomes ~13.98 MB of base64. Leave a little room.
+// 10 GB of raw bytes becomes ~13.98 GB of base64. Leave a little room.
 const MAX_CIPHERTEXT_CHARS = Math.ceil((LIMITS.maxFileBytes * 4) / 3) + 4096;
 
 function isBase64(value: unknown, expectedBytes?: number): value is string {

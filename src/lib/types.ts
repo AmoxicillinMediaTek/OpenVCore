@@ -70,7 +70,7 @@ export interface OpenPayload {
 export const CHECK_TOKEN = "openvcore.check.v1";
 
 export const LIMITS = {
-  maxFileBytes: 10 * 1024 * 1024,
+  maxFileBytes: 10 * 1024 * 1024 * 1024,
   maxTextChars: 100_000,
   maxNoteChars: 160,
   minPassphrase: 8,

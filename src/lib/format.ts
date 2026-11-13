@@ -5,7 +5,11 @@ export function formatBytes(bytes: number): string {
     return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} kB`;
   }
   const mb = bytes / (1024 * 1024);
-  return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  if (mb < 1024) {
+    return `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB`;
+  }
+  const gb = mb / 1024;
+  return `${gb < 10 ? gb.toFixed(1) : Math.round(gb)} GB`;
 }
 
 export function formatChars(chars: number): string {

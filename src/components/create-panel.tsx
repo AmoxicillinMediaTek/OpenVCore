@@ -88,7 +88,7 @@ export function CreatePanel() {
     const next = Array.from(list);
     const total = next.reduce((sum, item) => sum + item.size, 0);
     if (total > LIMITS.maxFileBytes) {
-      setError(`Those files add up to ${formatBytes(total)}. The limit is 10 MB.`);
+      setError(`Those files add up to ${formatBytes(total)}. The limit is 10 GB.`);
       return;
     }
     setFiles(next);
@@ -546,7 +546,7 @@ export function CreatePanel() {
                       choose
                     </button>
                   </p>
-                  <p className="font-mono text-[11px] text-ink-3">10 MB total · any type</p>
+                  <p className="font-mono text-[11px] text-ink-3">10 GB total · any type</p>
                 </>
               )}
               <input
