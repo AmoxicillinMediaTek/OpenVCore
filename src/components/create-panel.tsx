@@ -400,7 +400,7 @@ export function CreatePanel() {
                 <span className="font-mono text-[10px] text-ink-3">
                   {note.trim().length > 0
                     ? `${note.trim().length}/${LIMITS.maxNoteChars}`
-                    : "optional · shown as the heading"}
+                    : "optional"}
                 </span>
               </div>
               <input
