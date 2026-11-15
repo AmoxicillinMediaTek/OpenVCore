@@ -224,7 +224,8 @@ request.
 
 A password-protected link has its content key wrapped under a PBKDF2 key, so the password
 travels in the URL: `/s/{id}/raw/{password}` or `/s/{id}/raw?p={password}`. With neither,
-the handler answers with the exact address shape to paste, using the id it was asked for.
+the handler answers `No Access` and then the exact address shape to paste, using the id
+it was asked for.
 A wrong password is `401` and counts against a per-id, per-client budget of ten attempts
 per ten minutes, then `429` for the rest of the window. Right or wrong, the response sets
 `Referrer-Policy: no-referrer` so the password in the path never rides out on a link.

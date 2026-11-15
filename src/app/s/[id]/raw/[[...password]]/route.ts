@@ -150,7 +150,7 @@ function passwordHint(origin: string, id: string): string {
 }
 
 function passwordPrompt(origin: string, id: string): string {
-  return `This link is password protected.\n\n${passwordHint(origin, id)}\n\n` +
+  return `No Access\n\n\n${passwordHint(origin, id)}\n\n` +
     `Anything after /raw/ is read as the password, so the link can be opened\n` +
     `from a browser, curl, or any viewer that has no JavaScript.`;
 }
