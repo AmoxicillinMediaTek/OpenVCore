@@ -526,11 +526,23 @@ async function openLink(browser, link) {
     const direct = await fetch(`${BASE}${rawHref}`);
     const directBody = (await direct.text()).trim();
     check(
-      "raw: a direct request answers text/plain",
-      (direct.headers.get("content-type") ?? "").startsWith("text/plain"),
+      "raw: a direct request answers with a runnable script",
+      (direct.headers.get("content-type") ?? "").startsWith("application/x-sh"),
       direct.headers.get("content-type") ?? "",
     );
     check("raw: a direct request returns the plaintext", directBody === "raw-view-secret", directBody);
+
+    const browserAsk = await fetch(`${BASE}${rawHref}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml",
+      },
+    });
+    check(
+      "raw: a browser asking for the same url is refused",
+      browserAsk.status === 403 && (await browserAsk.text()).trim() === "No Access",
+      String(browserAsk.status),
+    );
     const afterDirect = await (await fetch(`${BASE}/api/secrets/${rawId}`)).json();
     check(
       "raw: a direct request spends no read",

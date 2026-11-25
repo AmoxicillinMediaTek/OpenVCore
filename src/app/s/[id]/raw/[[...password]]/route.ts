@@ -57,7 +57,11 @@ export async function GET(
 
   let plaintext: Uint8Array;
   if (record.kdf) {
-    if (!supplied) return plain(passwordPrompt(url.origin, id));
+    if (!supplied) {
+      // A shell gets the recipe; a browser gets nothing to read.
+      if (wantsDocument(request)) return plain("No Access", 403);
+      return plain(passwordPrompt(url.origin, id));
+    }
 
     const throttle = checkThrottle(`${id}:${clientKey(request)}`);
     if (!throttle.allowed) {
@@ -97,7 +101,13 @@ export async function GET(
   // A url link is a redirect, not a document: nothing to print here.
   if (record.kind === "url") return plain("This link has no text view.", 404);
 
-  if (record.kind === "text") return plain(new TextDecoder().decode(plaintext));
+  // The payload is for a shell, not a person: `curl -sSL …/raw | bash` runs it.
+  // A browser asking for the same URL gets the door.
+  if (wantsDocument(request)) return plain("No Access", 403);
+
+  if (record.kind === "text") {
+    return plain(new TextDecoder().decode(plaintext), 200, SHELL_TYPE);
+  }
 
   let files: FileEntry[];
   try {
@@ -151,8 +161,26 @@ function passwordHint(origin: string, id: string): string {
 
 function passwordPrompt(origin: string, id: string): string {
   return `No Access\n\n\n${passwordHint(origin, id)}\n\n` +
-    `Anything after /raw/ is read as the password, so the link can be opened\n` +
-    `from a browser, curl, or any viewer that has no JavaScript.`;
+    `Anything after /raw/ is read as the password, so curl, wget, or any client\n` +
+    `without JavaScript can fetch and run it.`;
+}
+
+/* ---- who is asking: a browser document, or a shell ---- */
+
+const SHELL_TYPE = "application/x-sh; charset=utf-8";
+
+const BROWSER_UA = /mozilla|chrome|chromium|safari|firefox|edg\/|opr\/|msie|trident/i;
+
+/**
+ * True when the request looks like a browser navigation. `curl`, `wget` and
+ * `fetch()` send a wildcard Accept and no `Mozilla` agent, so they fall through
+ * to the payload; a browser sending `text/html` (or any Mozilla-flavoured agent)
+ * gets `No Access` instead of a script it would render as a wall of text.
+ */
+function wantsDocument(request: Request): boolean {
+  const agent = request.headers.get("user-agent") ?? "";
+  const accept = request.headers.get("accept") ?? "";
+  return BROWSER_UA.test(agent) || accept.includes("text/html");
 }
 
 /* ---- password attempts: per id and client, in memory, best effort ---- */
@@ -200,11 +228,11 @@ function checkThrottle(key: string) {
   };
 }
 
-function plain(body: string, status = 200) {
+function plain(body: string, status = 200, type = "text/plain; charset=utf-8") {
   return new NextResponse(body, {
     status,
     headers: {
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": type,
       "Cache-Control": "no-store",
       // A password can sit in the path here, so keep it out of any Referer.
       "Referrer-Policy": "no-referrer",

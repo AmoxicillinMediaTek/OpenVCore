@@ -181,12 +181,21 @@ redirect has to be readable by the server at visit time.
 
 ## The raw view
 
-`/s/{id}/raw` is not a page. It is a route handler returning `text/plain; charset=utf-8`
-(`src/app/s/[id]/raw/[[...password]]/route.ts`), so the browser paints it with its own
-plain-text viewer —
-no app chrome, no stylesheet, no react tree. The button appears on the styled page only
-after the secret has been opened, so it never competes with `Open` and never offers a
-link to something still sealed.
+`/s/{id}/raw` is not a page. It is a route handler
+(`src/app/s/[id]/raw/[[...password]]/route.ts`) that serves the payload to a shell, not to
+a person. A text secret comes back as `application/x-sh; charset=utf-8` with no password
+in the URL, so one line installs and runs it:
+
+```bash
+curl -sSL https://…/s/{id}/raw | bash
+```
+
+A browser asking for that same URL — any `Mozilla` user agent, or `Accept: text/html` —
+gets `403` and the body `No Access`, because a script rendered as a document is a wall of
+text and nothing else. `curl`, `wget` and `fetch()` send a wildcard `Accept` and no browser
+agent, so they fall through to the payload. Nothing else changes: no app chrome, no
+stylesheet, no react tree, and the button on the styled page appears only after the secret
+has been opened.
 
 The key is a hash of the id, so the handler can open the payload by itself. It uses
 `peekSecret`, never `consumeSecret`, so a raw view costs no read. When a tab has already
@@ -210,9 +219,9 @@ travel as base64 in the same entry.
 
 A cold request — no stash, no worker, curl — is answered by the route handler: it looks
 the secret up, derives the key from the id in the URL, decrypts, and returns the text.
-Text secrets come back verbatim; a single text file comes back as its contents, a
-multi-file secret as a name and size listing. Unknown ids answer `404`, expired links
-`410`.
+Text secrets come back verbatim as `application/x-sh`; a single text file comes back as
+its contents, a multi-file secret as a name and size listing, both as `text/plain`.
+Unknown ids answer `404`, expired links `410`.
 
 A file-mode link shows a small `Raw` button beside every file whose bytes are text —
 `src/lib/textual.ts` decides from the MIME type and then the extension, so a `.json`, `.md`,
@@ -220,7 +229,8 @@ A file-mode link shows a small `Raw` button beside every file whose bytes are te
 `/s/{id}/raw?file={index}` (the handler also takes `?file={name}`), which returns just
 that entry, `415` when it is not text, `404` when no entry matches. The service worker
 stashes per-file text under the same selector, so the in-tab click still makes no network
-request.
+request; a browser hitting that URL cold is refused like any other, since the route only
+speaks to clients.
 
 A password-protected link has its content key wrapped under a PBKDF2 key, so the password
 travels in the URL: `/s/{id}/raw/{password}` or `/s/{id}/raw?p={password}`. With neither,
