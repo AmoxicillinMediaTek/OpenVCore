@@ -193,9 +193,15 @@ curl -sSL https://…/s/{id}/raw | bash
 A browser asking for that same URL — any `Mozilla` user agent, or `Accept: text/html` —
 gets `403` and the body `No Access`, because a script rendered as a document is a wall of
 text and nothing else. `curl`, `wget` and `fetch()` send a wildcard `Accept` and no browser
-agent, so they fall through to the payload. Nothing else changes: no app chrome, no
-stylesheet, no react tree, and the button on the styled page appears only after the secret
-has been opened.
+agent, so they fall through to the payload. Roblox is checked before the browser rule:
+executors send `Mozilla/5.0 … Roblox/WinInet`, and `loadstring(game:HttpGet(…))` has to get
+the script, not the door. When a Lua client asks a locked link for its body without the
+password, it gets `warn("OpenVCore: no access — add the password to the address: …")`
+instead of prose, because parsing that prose makes Luau die with
+`expected identifier when parsing method name, got '//'` on the `https://` line.
+
+Nothing else changes: no app chrome, no stylesheet, no react tree, and the button on the
+styled page appears only after the secret has been opened.
 
 The key is a hash of the id, so the handler can open the payload by itself. It uses
 `peekSecret`, never `consumeSecret`, so a raw view costs no read. When a tab has already

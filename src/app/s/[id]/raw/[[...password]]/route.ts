@@ -60,6 +60,7 @@ export async function GET(
     if (!supplied) {
       // A shell gets the recipe; a browser gets nothing to read.
       if (wantsDocument(request)) return plain("No Access", 403);
+      if (isScriptClient(request)) return plain(scriptNotice(url.origin, id), 200, SHELL_TYPE);
       return plain(passwordPrompt(url.origin, id));
     }
 
@@ -77,7 +78,7 @@ export async function GET(
       const matches = await passphraseMatches(passKey, record.kdf.checkIv, record.kdf.check);
       if (!matches) {
         throttle.fail();
-        return plain(`Wrong password.\n\n${passwordHint(url.origin, id)}`, 401);
+        return wrongPassword(request, url.origin, id);
       }
       throttle.reset();
       const rawKey = await decryptBytes(
@@ -88,7 +89,7 @@ export async function GET(
       plaintext = await open(record, await importContentKey(rawKey));
     } catch {
       throttle.fail();
-      return plain(`Wrong password.\n\n${passwordHint(url.origin, id)}`, 401);
+      return wrongPassword(request, url.origin, id);
     }
   } else {
     try {
@@ -165,22 +166,56 @@ function passwordPrompt(origin: string, id: string): string {
     `without JavaScript can fetch and run it.`;
 }
 
+function wrongPassword(request: Request, origin: string, id: string) {
+  // Roblox raises on a 4xx and never runs the body, so a script client gets the
+  // notice as a 200 it can print. The throttle is server side either way.
+  if (isScriptClient(request)) {
+    return plain(
+      `warn("OpenVCore: wrong password — nothing was spent, nothing was revealed.")`,
+      200,
+      SHELL_TYPE,
+    );
+  }
+  return plain(`Wrong password.\n\n${passwordHint(origin, id)}`, 401);
+}
+
 /* ---- who is asking: a browser document, or a shell ---- */
 
 const SHELL_TYPE = "application/x-sh; charset=utf-8";
 
 const BROWSER_UA = /mozilla|chrome|chromium|safari|firefox|edg\/|opr\/|msie|trident/i;
 
+/** Roblox itself, or an executor that identifies as Roblox. */
+const SCRIPT_UA = /roblox|lua|synapse|wave|xeno|delta|fluxus|krnl|solara|argon/i;
+
 /**
  * True when the request looks like a browser navigation. `curl`, `wget` and
  * `fetch()` send a wildcard Accept and no `Mozilla` agent, so they fall through
  * to the payload; a browser sending `text/html` (or any Mozilla-flavoured agent)
  * gets `No Access` instead of a script it would render as a wall of text.
+ *
+ * Roblox is checked first on purpose: executors commonly send
+ * `Mozilla/5.0 … Roblox/WinInet`, and `loadstring(game:HttpGet(…))` must get the
+ * script, not the door.
  */
 function wantsDocument(request: Request): boolean {
   const agent = request.headers.get("user-agent") ?? "";
   const accept = request.headers.get("accept") ?? "";
+  if (SCRIPT_UA.test(agent)) return false;
   return BROWSER_UA.test(agent) || accept.includes("text/html");
+}
+
+/**
+ * A Lua client cannot read prose: a prompt full of `https://` makes Luau die with
+ * `expected identifier when parsing method name, got '//'`. Hand it a line that
+ * parses and prints the same instruction to the console instead.
+ */
+function isScriptClient(request: Request): boolean {
+  return SCRIPT_UA.test(request.headers.get("user-agent") ?? "");
+}
+
+function scriptNotice(origin: string, id: string): string {
+  return `warn("OpenVCore: no access — add the password to the address: ${origin}/s/${id}/raw/YOUR-PASSWORD")`;
 }
 
 /* ---- password attempts: per id and client, in memory, best effort ---- */

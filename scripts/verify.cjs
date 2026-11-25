@@ -543,6 +543,18 @@ async function openLink(browser, link) {
       browserAsk.status === 403 && (await browserAsk.text()).trim() === "No Access",
       String(browserAsk.status),
     );
+
+    const robloxAsk = await fetch(`${BASE}${rawHref}`, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Roblox/WinInet",
+      },
+    });
+    check(
+      "raw: a roblox client is not mistaken for a browser",
+      robloxAsk.status === 200 && (await robloxAsk.text()).trim() === "raw-view-secret",
+      String(robloxAsk.status),
+    );
     const afterDirect = await (await fetch(`${BASE}/api/secrets/${rawId}`)).json();
     check(
       "raw: a direct request spends no read",
